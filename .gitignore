@@ -1,0 +1,6 @@
+dist/
+offline/html-game-launcher
+offline/html-game-launcher.exe
+offline/launcher.log
+node_modules/
+.DS_Store

@@ -1,0 +1,106 @@
+name: Release offline build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "リリースのタグ名（例: v1.0.0）"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test tools/build.test.mjs
+      - run: node tools/build.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          include-hidden-files: true
+
+  windows:
+    needs: dist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: offline/go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Build and package
+        working-directory: offline
+        run: |
+          go test ./...
+          PKG=html-game-launcher-windows
+          mkdir -p ../out/$PKG
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H=windowsgui" -o ../out/$PKG/html-game-launcher.exe .
+          cp package/stop.bat ../out/$PKG/
+          cp -r ../dist ../out/$PKG/dist
+          cd ../out && zip -r -X $PKG.zip $PKG
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zip-windows
+          path: out/html-game-launcher-windows.zip
+
+  macos:
+    needs: dist
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: offline/go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Build and package
+        working-directory: offline
+        run: |
+          PKG=html-game-launcher-macos
+          mkdir -p ../out/$PKG
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ../out/arm64 .
+          GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ../out/amd64 .
+          lipo -create -output ../out/$PKG/html-game-launcher ../out/arm64 ../out/amd64
+          codesign --force --sign - ../out/$PKG/html-game-launcher
+          cp package/start.command package/stop.command ../out/$PKG/
+          chmod +x ../out/$PKG/html-game-launcher ../out/$PKG/*.command
+          cp -r ../dist ../out/$PKG/dist
+          cd ../out && zip -r -X $PKG.zip $PKG
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zip-macos
+          path: out/html-game-launcher-macos.zip
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: zip-*
+          merge-multiple: true
+          path: out
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$TAG" out/*.zip --title "$TAG" --notes "オフライン版（Windows / macOS）" || \
+          gh release upload "$TAG" out/*.zip --clobber

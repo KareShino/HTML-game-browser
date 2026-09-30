@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>クリックラッシュ（単一HTMLサンプル）</title>
+<style>
+  body{margin:0;height:100vh;display:grid;place-items:center;background:#1e293b;color:#f8fafc;font-family:sans-serif;text-align:center}
+  button{font-size:2rem;padding:1rem 2.5rem;border:0;border-radius:12px;background:#f59e0b;color:#1e293b;cursor:pointer}
+  p{font-size:1.4rem;margin:.6rem}
+</style>
+</head>
+<body>
+<main>
+  <h1>クリックラッシュ</h1>
+  <p>10秒間で何回押せる？</p>
+  <p>残り <b id="t">10</b> 秒 / 回数 <b id="c">0</b> / ハイスコア <b id="h">0</b></p>
+  <button id="b">スタート</button>
+</main>
+<script>
+  let count = 0, left = 10, timer = null;
+  const $ = (id) => document.getElementById(id);
+  $("h").textContent = localStorage.getItem("highscore") || 0;
+  $("b").onclick = () => {
+    if (!timer) {
+      count = 0; left = 10; $("b").textContent = "押せ！";
+      timer = setInterval(() => {
+        $("t").textContent = --left;
+        if (left <= 0) {
+          clearInterval(timer); timer = null; $("b").textContent = "もう一度";
+          if (count > Number(localStorage.getItem("highscore") || 0)) localStorage.setItem("highscore", count);
+          $("h").textContent = localStorage.getItem("highscore");
+        }
+      }, 1000);
+    }
+    $("c").textContent = ++count;
+  };
+</script>
+</body>
+</html>

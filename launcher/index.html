@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ja" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HTMLゲームランチャー</title>
+<script>
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("launcher:theme"); } catch (e) {}
+    if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="view-list" class="view">
+  <header class="topbar">
+    <h1 class="app-title">HTMLゲームランチャー</h1>
+    <span id="count" class="count"></span>
+    <span class="spacer"></span>
+    <button type="button" class="btn theme-toggle"></button>
+  </header>
+  <div class="layout">
+    <aside class="sidebar"><ul id="game-list" class="game-list"></ul></aside>
+    <main id="detail" class="detail"></main>
+  </div>
+</div>
+
+<div id="view-play" class="view" hidden>
+  <div id="stage" class="stage">
+    <header class="playbar" id="playbar">
+      <button type="button" id="back" class="btn accent">← 一覧に戻る</button>
+      <h2 id="play-title" class="play-title"></h2>
+      <button type="button" id="restart" class="btn">最初から</button>
+      <button type="button" id="fullscreen" class="btn">全画面</button>
+      <button type="button" class="btn theme-toggle"></button>
+    </header>
+    <div class="frame-wrap"><iframe id="frame" title="ゲーム" allow="autoplay; fullscreen; gamepad; clipboard-write"></iframe></div>
+    <div id="hotzone" class="hotzone"></div>
+    <button type="button" id="fs-back" class="btn accent fs-corner">← 一覧に戻る</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
