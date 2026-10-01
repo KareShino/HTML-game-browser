@@ -2,7 +2,7 @@
 
 ## Web版の開き方
 
-1. ブラウザで https://kareshino.github.io/html-game-browser/ を開く
+1. ブラウザで [https://kareshino.github.io/html-game-browser/](https://kareshino.github.io/HTML-game-browser/) を開く
 
 ## ゲームの追加方法
 
