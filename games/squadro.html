@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SQUADRO — 2人対戦 / AI対戦</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --wood:#c9a274; --wood-2:#b98d5c;
+  --board:#1b1a1e; --board-2:#2a292f;
+  --ink:#efe9dc; --ink-dim:rgba(239,233,220,.42);
+  --red:#a8283b; --amber:#d8a45c;
+  --c:clamp(34px, 9.6vw, 60px);
+  --e:calc(var(--c) * .52);
+  --jp:"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic","Noto Sans JP",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  min-height:100dvh;
+  background:radial-gradient(120% 80% at 50% 0%, #ddb98d 0%, var(--wood) 45%, var(--wood-2) 100%);
+  font-family:"Jost",var(--jp);color:#3a2b1c;
+  display:flex;flex-direction:column;align-items:center;
+  padding:16px 12px 40px;gap:14px;
+}
+header{text-align:center}
+h1{font-weight:300;letter-spacing:.42em;font-size:clamp(20px,5vw,30px);text-transform:lowercase;color:#4a3826;text-indent:.42em}
+.sub{font-family:var(--jp);font-size:12px;letter-spacing:.08em;color:#6b5136;margin-top:4px}
+
+.turn{
+  display:flex;align-items:center;gap:12px;
+  background:rgba(27,26,30,.9);color:var(--ink);
+  padding:9px 16px;border-radius:999px;
+  font-family:var(--jp);font-size:13px;letter-spacing:.04em;
+  box-shadow:0 6px 18px rgba(60,35,10,.28);
+}
+.turn .chip{width:14px;height:14px;border-radius:3px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.25)}
+.turn .score{color:var(--ink-dim);font-family:"Jost";letter-spacing:.1em}
+.turn.tappable{cursor:pointer;outline:2px dashed rgba(239,233,220,.45);outline-offset:3px}
+.turn.tappable:hover{background:rgba(27,26,30,1)}
+
+.board{
+  display:grid;
+  grid-template-columns:var(--e) repeat(7, var(--c)) var(--e);
+  grid-template-rows:var(--e) repeat(7, var(--c)) var(--e);
+  background:linear-gradient(155deg,var(--board-2),var(--board) 55%);
+  padding:calc(var(--c)*.22);border-radius:calc(var(--c)*.22);
+  box-shadow:0 22px 40px rgba(50,28,6,.4), inset 0 1px 0 rgba(255,255,255,.09);
+  touch-action:manipulation;
+}
+.cell{position:relative;display:flex;align-items:center;justify-content:center}
+.play::before{
+  content:"";position:absolute;inset:14%;border-radius:22%;
+  background:radial-gradient(60% 60% at 38% 30%, rgba(255,255,255,.05), rgba(255,255,255,0) 70%);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.05);
+}
+.bay::before{content:"";position:absolute;inset:18% 10%;border-radius:999px;background:rgba(255,255,255,.045);box-shadow:inset 0 1px 2px rgba(0,0,0,.5)}
+.bay.h::before{inset:22% 6%}
+.bay.v::before{inset:6% 22%}
+
+.dots{display:flex;gap:3px;align-items:center;justify-content:center}
+.dots.v{flex-direction:column}
+.dots i{width:4px;height:4px;border-radius:50%;background:var(--ink);opacity:.85}
+
+.pc{
+  position:absolute;width:74%;height:74%;
+  clip-path:polygon(50% 0%, 100% 34%, 100% 92%, 50% 100%, 0% 92%, 0% 34%);
+  display:flex;align-items:center;justify-content:center;
+  font-size:calc(var(--c)*.3);font-weight:500;transition:transform .18s ease;cursor:default;
+}
+.pc.R{background:linear-gradient(150deg,#c33a4d,var(--red));color:#ffd9de}
+.pc.Y{background:linear-gradient(150deg,#eec085,var(--amber));color:#5a3c15}
+.pc .n{transform:rotate(var(--unrot,0deg));opacity:.72;padding-top:8%}
+.pc.up{--unrot:0deg}
+.pc.down{transform:rotate(180deg);--unrot:180deg}
+.pc.right{transform:rotate(90deg);--unrot:-90deg}
+.pc.left{transform:rotate(-90deg);--unrot:90deg}
+.pc.live{cursor:pointer}
+.pc.live:hover{filter:brightness(1.12)}
+.pc.sel{outline:2px solid var(--ink);outline-offset:2px}
+.pc.doomed{animation:blink .6s ease-in-out infinite alternate}
+@keyframes blink{from{filter:brightness(.55) saturate(.4)}to{filter:brightness(1.1)}}
+
+.cell.path::after{content:"";position:absolute;width:26%;height:26%;border-radius:50%;background:var(--ink);opacity:.28}
+.cell.target::after{width:64%;height:64%;border-radius:26%;background:none;opacity:1;box-shadow:inset 0 0 0 2px var(--ink)}
+.pc.best{outline:2px dashed rgba(239,233,220,.9);outline-offset:3px}
+.cell.besttgt::after{content:"";position:absolute;width:64%;height:64%;border-radius:26%;border:2px dashed rgba(239,233,220,.8)}
+
+.panel{
+  display:flex;gap:12px 14px;align-items:center;flex-wrap:wrap;justify-content:center;
+  font-family:var(--jp);font-size:12.5px;color:#4a3826;
+  background:rgba(255,250,242,.55);border:1px solid rgba(60,40,15,.16);
+  padding:10px 14px;border-radius:14px;max-width:min(660px,94vw);
+}
+.panel label{display:flex;align-items:center;gap:6px}
+select,button,input[type=number]{
+  font-family:var(--jp);font-size:12.5px;
+  border:1px solid rgba(40,25,10,.3);background:rgba(255,252,246,.9);
+  color:#4a3826;padding:6px 12px;border-radius:999px;cursor:pointer;
+}
+input[type=number]{width:66px;padding:6px 8px;cursor:text;text-align:right}
+button:hover:not(:disabled){background:#fffaf2}
+button:disabled,select:disabled,input:disabled{opacity:.38;cursor:default}
+[hidden]{display:none!important}
+.hud{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center}
+.info{font-family:var(--jp);font-size:11.5px;color:#6b5136;min-height:1.2em}
+.note{font-family:var(--jp);font-size:12px;line-height:1.7;color:#5d4630;max-width:min(620px,92vw);text-align:center}
+.win{font-family:var(--jp);font-size:14px;font-weight:700;background:#1b1a1e;color:var(--ink);padding:9px 18px;border-radius:999px}
+:focus-visible{outline:2px solid #1b1a1e;outline-offset:3px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>squadro</h1>
+  <div class="sub">先に4個スタート地点へ戻したら勝ち</div>
+</header>
+
+<div class="turn" id="turnbar">
+  <span class="chip" id="chip"></span>
+  <span id="turnText">赤の番</span>
+  <span class="score" id="moveNo">1手目</span>
+  <span class="score" id="score">R 0 · Y 0</span>
+</div>
+
+<div class="board" id="board"></div>
+
+<div class="panel">
+  <label>先手
+    <select id="first"><option value="R">赤</option><option value="Y">白</option></select>
+  </label>
+  <label><span id="lbR">赤</span>
+    <select id="pR"><option value="human">人間</option><option value="ai">AI</option></select>
+  </label>
+  <label><span id="lbY">白</span>
+    <select id="pY"><option value="human">人間</option><option value="ai">AI</option></select>
+  </label>
+  <label>読み
+    <select id="lvl">
+      <option value="2">2手</option>
+      <option value="4">4手</option>
+      <option value="6" selected>6手</option>
+      <option value="8">8手</option>
+      <option value="12">12手</option>
+      <option value="custom">手数指定</option>
+      <option value="max">全手読み</option>
+    </select>
+    <input type="number" id="depth" min="1" max="99" value="10" hidden>
+  </label>
+  <label>思考時間
+    <input type="number" id="tmo" min="0.1" max="600" step="0.5" value="1.5">秒
+  </label>
+  <label>速さ
+    <select id="spd"><option value="250">速い</option><option value="700" selected>普通</option><option value="1400">ゆっくり</option></select>
+  </label>
+  <label><input type="checkbox" id="hint"> 最善手表示</label>
+  <label><input type="checkbox" id="edit"> 配置編集</label>
+  <label><input type="checkbox" id="swap"> 色を入れ替え</label>
+  <label><input type="checkbox" id="misere"> 負けるが勝ち</label>
+  <label><input type="checkbox" id="auto"> 自動再生</label>
+  <button id="step">AIを1手進める</button>
+</div>
+
+<div class="hud">
+  <button id="undo">1手戻す</button>
+  <button id="reset">最初から</button>
+  <span id="winMsg"></span>
+</div>
+<div class="info" id="aiInfo"></div>
+
+<p class="note">
+  コマをタップすると経路・着地点・戻される相手コマが表示され、もう一度タップで確定。<br>
+  コマの数字は今の移動力（往路と復路で変わる）。飛び越しも1手ぶんとして数える。<br>
+  「全手読み」は思考時間いっぱいまで深く読み、終局まで読み切れた場合はそこで打ち切る。<br>
+  「負けるが勝ち」では先に4個戻した側が負け。AIは評価を反転させて最悪手を狙う。<br>
+  「最善手表示」は人間の手番に、AIと同じ設定で計算した推奨手を破線で示す。<br>
+  「配置編集」中はコマ→置きたいマスの順にタップで自由配置。コマを2回タップで進行方向が反転。<br>
+  盤上部の手番バーをタップすると手番が入れ替わる。
+</p>
+
+<script>
+/* ============ ルール＋探索（Workerにも同じ定義を渡す） ============ */
+const RULES = `
+// ドット数: 赤=出発31213/対岸13231、黄=出発13231/対岸31213
+var SP={ R:{out:[3,1,2,1,3], back:[1,3,2,3,1]}, Y:{out:[1,3,2,3,1], back:[3,1,2,1,3]} };
+function outDir(s){ return s==='R' ? -1 : 1; }   // 赤は下→上、白は左→右
+function farEnd(s){ return s==='R' ? 0 : 6; }
+function homeEnd(s){ return s==='R' ? 6 : 0; }
+function other(s){ return s==='R' ? 'Y' : 'R'; }
+function speed(p){ var t=SP[p.side]; return (p.dir===outDir(p.side) ? t.out : t.back)[p.idx]; }
+
+function initState(first){
+  return {
+    turn: first||'R', moves:0,
+    R:[0,1,2,3,4].map(function(i){ return {side:'R',idx:i,pos:6,dir:-1,done:false}; }),   // 列 idx+1 を下(6)→上(0)
+    Y:[0,1,2,3,4].map(function(i){ return {side:'Y',idx:i,pos:0,dir:1,done:false}; })     // 行 idx+1 を左(0)→右(6)
+  };
+}
+function oppAt(s,p,step){
+  if(step<1||step>5) return null;
+  const o = p.side==='R' ? s.Y[step-1] : s.R[step-1];
+  return (!o.done && o.pos === p.idx+1) ? o : null;
+}
+// 点の数 = 動かせる回数。1回で「1マス進む」か「連続する相手コマを飛び越す」
+function simulate(s,p,noPath){
+  if(p.done) return null;
+  const d=p.dir, n=speed(p);
+  const inRange = function(v){ return v>=0 && v<=6; };
+  let pos=p.pos, jumped=[], path=[], flip=false, fin=false;
+  const atEnd = function(){
+    return (d===outDir(p.side) && pos===farEnd(p.side)) ||
+           (d!==outDir(p.side) && pos===homeEnd(p.side));
+  };
+  for(let t=0;t<n;t++){
+    const next=pos+d;
+    if(!inRange(next)) break;
+    if(oppAt(s,p,next)){
+      let k=pos+d;
+      while(inRange(k)){ const o=oppAt(s,p,k); if(!o) break; jumped.push(o); if(!noPath) path.push(k); k+=d; }
+      pos=Math.max(0,Math.min(6,k)); if(!noPath) path.push(pos);
+    }else{
+      pos=next; if(!noPath) path.push(pos);
+    }
+    if(atEnd()) break;
+  }
+  if(atEnd()){ if(d===outDir(p.side)) flip=true; else fin=true; }
+  return {pos:pos,jumped:jumped,path:path,flip:flip,fin:fin};
+}
+function perform(s,p,mv){
+  const u={p:p, pos:p.pos, dir:p.dir, done:p.done, j:mv.jumped.map(function(o){ return {o:o,pos:o.pos}; })};
+  p.pos=mv.pos;
+  if(mv.flip) p.dir=-p.dir;
+  if(mv.fin) p.done=true;
+  for(const o of mv.jumped) o.pos = (o.dir===outDir(o.side)) ? homeEnd(o.side) : farEnd(o.side);
+  return u;
+}
+function unperform(u){
+  u.p.pos=u.pos; u.p.dir=u.dir; u.p.done=u.done;
+  for(const x of u.j) x.o.pos=x.pos;
+}
+function goalsOf(s,side){ return s[side].filter(function(p){ return p.done; }).length; }
+function winnerOf(s){ return goalsOf(s,'R')>=4 ? 'R' : (goalsOf(s,'Y')>=4 ? 'Y' : null); }
+function legal(s,side){
+  return s[side].filter(function(p){ return !p.done; })
+                .map(function(p){ return {p:p, mv:simulate(s,p,true)}; });
+}
+
+/* --- 評価: 残り手数ベース --- */
+// side/idx のコマが pos・dir にいるとき、ゴールまで最低何手か
+function turnsOf(side,idx,pos,dir){
+  const t=SP[side], a=t.out[idx], b=t.back[idx];
+  if(dir===outDir(side))
+    return Math.ceil(Math.abs(farEnd(side)-pos)/a) + Math.ceil(6/b);
+  return Math.ceil(Math.abs(homeEnd(side)-pos)/b);
+}
+function turnsLeft(p){ return p.done ? 0 : turnsOf(p.side,p.idx,p.pos,p.dir); }
+// いま飛ばされたら、そのコマは何手ぶん損するか
+function resetLoss(o){
+  const np = (o.dir===outDir(o.side)) ? homeEnd(o.side) : farEnd(o.side);
+  return turnsOf(o.side,o.idx,np,o.dir) - turnsOf(o.side,o.idx,o.pos,o.dir);
+}
+// そのコマが今すぐ動いたら、相手に何手ぶん損させられるか
+function threatGain(s,p){
+  if(p.done) return 0;
+  const mv=simulate(s,p,true);
+  if(!mv || !mv.jumped.length) return 0;
+  let g=0; for(const o of mv.jumped) g+=resetLoss(o);
+  return g;
+}
+// 5個目（＝一番遠いコマ）は妨害役。実際に与えられる手数損で価値を測る
+function blockValue(s,p){
+  if(p.done || p.pos<1 || p.pos>5) return 0;
+  let ahead=0, k=p.pos+p.dir;
+  while(k>=0 && k<=6){ if(oppAt(s,p,k)) ahead++; k+=p.dir; }
+  return 0.5*threatGain(s,p) + 0.15*ahead;
+}
+// 相手が次に飛ばしてきたとき、自分が受ける最大の手数損
+function dangerTo(s,side){
+  const foe=s[other(side)];
+  let m=0;
+  for(let i=0;i<5;i++){ const g=threatGain(s,foe[i]); if(g>m) m=g; }
+  return m;
+}
+function sideCost(s,side){
+  const ps=s[side], v=[0,0,0,0,0];
+  let worst=null, worstT=-1;
+  for(let i=0;i<5;i++){
+    const t=turnsLeft(ps[i]); v[i]=t;
+    if(t>worstT){ worstT=t; worst=ps[i]; }
+  }
+  v.sort(function(a,b){ return a-b; });
+  // 勝利条件は4個。5個目の手数は無視し、盤上での妨害力だけを引く
+  return v[0]+v[1]+v[2]+v[3] - blockValue(s,worst);
+}
+// 手番側から見た評価。残り手数が少ないほど良い
+var DANGER_W=0.35;   // 相手の飛び越し脅威をどれだけ重く見るか
+var MISERE=false;    // 負けるが勝ち: 評価も終局スコアも反転させ、最悪手を狙わせる
+function evaluate(s,side){
+  const v = sideCost(s,other(side)) - sideCost(s,side) - DANGER_W*dangerTo(s,side) + 0.4;
+  return MISERE ? -v : v;
+}
+
+/* --- Zobristハッシュ＋置換表 --- */
+var ZOB={R:[],Y:[],t:[0,0]}, TT=new Map();
+(function(){
+  function rnd(){ return (Math.random()*4294967296)>>>0; }
+  for(const sd of ['R','Y']) for(let i=0;i<5;i++){
+    const a=[]; for(let v=0;v<15;v++) a.push([rnd(),rnd()]);
+    ZOB[sd].push(a);
+  }
+  ZOB.t=[rnd(),rnd()];
+})();
+function pcode(p){ return p.done ? 14 : (p.pos + (p.dir===outDir(p.side)?0:7)); }  // 復路pos6とゴール済みを区別
+var H1=0,H2=0;
+function hashOf(s,side){
+  let h1=0,h2=0;
+  for(let i=0;i<5;i++){
+    const a=ZOB.R[i][pcode(s.R[i])], b=ZOB.Y[i][pcode(s.Y[i])];
+    h1^=a[0]^b[0]; h2^=a[1]^b[1];
+  }
+  if(side==='Y'){ h1^=ZOB.t[0]; h2^=ZOB.t[1]; }
+  H1=h1>>>0; H2=h2>>>0;
+}
+
+/* --- ネガマックス＋αβ＋置換表 --- */
+var nodes=0, deadline=0, aborted=false, truncated=false;
+var QMAX=8;
+// 静止探索: 飛び越しが続く間だけ読み進めて、末端が乱戦のまま切れるのを防ぐ
+function quiesce(s, side, alpha, beta, qd){
+  const w=winnerOf(s);
+  if(w) return (w===side ? 9999 : -9999) * (MISERE?-1:1);
+  truncated=true;
+  const stand=evaluate(s,side);
+  if(qd<=0 || stand>=beta) return stand;
+  if((++nodes & 255)===0 && performance.now()>deadline){ aborted=true; return stand; }
+  if(stand>alpha) alpha=stand;
+  let best=stand;
+  const ms=legal(s,side);
+  for(const m of ms){
+    if(!m.mv.jumped.length) continue;           // 飛び越す手だけ延長
+    const u=perform(s,m.p,m.mv);
+    const v=-quiesce(s, other(side), -beta, -alpha, qd-1);
+    unperform(u);
+    if(aborted) return best;
+    if(v>best) best=v;
+    if(best>alpha) alpha=best;
+    if(alpha>=beta) break;
+  }
+  return best;
+}
+function negamax(s, side, depth, alpha, beta){
+  const w = winnerOf(s);
+  if(w) return (w===side ? 9999+depth : -9999-depth) * (MISERE?-1:1);
+  if(depth===0) return quiesce(s, side, alpha, beta, QMAX);
+  if((++nodes & 255)===0 && performance.now()>deadline){ aborted=true; return evaluate(s,side); }
+
+  hashOf(s,side);
+  const k1=H1, k2=H2, e=TT.get(k1);
+  let ttIdx=-1;
+  if(e && e.k2===k2){
+    ttIdx=e.idx;
+    if(e.depth>=depth){
+      if(e.tr) truncated=true;
+      if(e.flag===0) return e.val;
+      if(e.flag===1){ if(e.val>alpha) alpha=e.val; }
+      else if(e.val<beta) beta=e.val;
+      if(alpha>=beta) return e.val;
+    }
+  }
+
+  const ms = legal(s, side);
+  // 置換表の最善手 → 飛び越し数 → 進んだ距離 の順で読む
+  ms.sort(function(a,b){
+    if(a.p.idx===ttIdx) return -1;
+    if(b.p.idx===ttIdx) return 1;
+    return (b.mv.jumped.length-a.mv.jumped.length)
+        || (Math.abs(b.mv.pos-b.p.pos)-Math.abs(a.mv.pos-a.p.pos));
+  });
+
+  const outerTr=truncated; truncated=false;
+  const alpha0=alpha;
+  let best=-Infinity, bestIdx=-1;
+  for(const m of ms){
+    const u=perform(s,m.p,m.mv);
+    const v=-negamax(s, other(side), depth-1, -beta, -alpha);
+    unperform(u);
+    if(aborted){ truncated=true; return best>-Infinity?best:v; }
+    if(v>best){ best=v; bestIdx=m.p.idx; }
+    if(best>alpha) alpha=best;
+    if(alpha>=beta) break;
+  }
+  const myTr=truncated;
+  truncated = outerTr || myTr;
+
+  const flag = best<=alpha0 ? 2 : (best>=beta ? 1 : 0);
+  if(TT.size>600000) TT.clear();
+  TT.set(k1,{k2:k2, depth:depth, val:best, flag:flag, idx:bestIdx, tr:myTr});
+  return best;
+}
+// 反復深化。時間切れになった深さの結果は捨てる
+function chooseMove(s, side, maxDepth, budgetMs){
+  const ms = legal(s, side);
+  if(!ms.length) return null;
+  nodes=0; aborted=false; deadline=performance.now()+budgetMs;
+  const noise = maxDepth<=2 ? 0.9 : (maxDepth<=4 ? 0.25 : 0);
+  let best=ms[0], reached=0, solved=false;
+  for(let d=1; d<=maxDepth; d++){
+    truncated=false;
+    let localBest=null, alpha=-Infinity;
+    for(const m of ms){
+      const u=perform(s,m.p,m.mv);
+      // 弱い設定ではノイズを載せるため全幅、それ以外は直前の最善値で窓を狭める
+      const v=-negamax(s, other(side), d-1, -Infinity, noise>0 ? Infinity : -alpha)
+              + Math.random()*noise;
+      unperform(u);
+      if(aborted) break;
+      if(v>alpha){ alpha=v; localBest=m; }
+    }
+    if(aborted) break;
+    best=localBest||best; reached=d;
+    if(!truncated){ solved=true; break; }      // 終局まで読み切った
+    if(alpha>9000) break;                       // 勝ち筋確定
+    if(performance.now()>deadline) break;
+  }
+  return {p:best.p, mv:best.mv, depth:reached, solved:solved, nodes:nodes};
+}
+`;
+eval(RULES);
+
+/* ============ 表示 ============ */
+let st, sel=null, prev=null, history=[], timer=null, thinking=false, aiSeq=0, hintSeq=0, hintMove=null, editSel=null;
+// 表示色。「色を入れ替え」で赤白の見た目と呼び名だけが入れ替わる（進行方向・移動力は不変）
+const nm  = side => (side==='R') !== $('swap').checked ? '赤' : '白';
+const cls = side => nm(side)==='赤' ? 'R' : 'Y';
+const $ = id => document.getElementById(id);
+const board=$('board');
+const isAI = side => $(side==='R'?'pR':'pY').value==='ai';
+const DRAW_LIMIT = 400;
+const drawn = () => st.moves>=DRAW_LIMIT;
+const delayMs = () => +$('spd').value;
+const budgetMs = () => Math.max(100, (+$('tmo').value||1.5)*1000);
+function depthOf(){
+  const v=$('lvl').value;
+  if(v==='max') return 999;
+  if(v==='custom') return Math.max(1, Math.min(99, +$('depth').value||1));
+  return +v;
+}
+
+function buildBoard(){
+  board.innerHTML='';
+  for(let gr=0; gr<9; gr++) for(let gc=0; gc<9; gc++){
+    const d=document.createElement('div');
+    d.className='cell';
+    const r=gr-1, c=gc-1;
+    if(gr===0||gr===8||gc===0||gc===8){
+      if(gr===0 && c>=1 && c<=5) d.appendChild(dots(SP.R.back[c-1],'h'));
+      if(gr===8 && c>=1 && c<=5) d.appendChild(dots(SP.R.out[c-1],'h'));
+      if(gc===0 && r>=1 && r<=5) d.appendChild(dots(SP.Y.out[r-1],'v'));
+      if(gc===8 && r>=1 && r<=5) d.appendChild(dots(SP.Y.back[r-1],'v'));
+    }else{
+      d.id='c-'+r+'-'+c;
+      const corner=(r===0||r===6)&&(c===0||c===6);
+      if(!corner){
+        if(r>=1&&r<=5&&c>=1&&c<=5) d.className='cell play';
+        else if(c===0||c===6) d.className='cell bay h';
+        else d.className='cell bay v';
+      }
+    }
+    board.appendChild(d);
+  }
+}
+function dots(n,orient){
+  const w=document.createElement('div'); w.className='dots '+orient;
+  for(let i=0;i<n;i++) w.appendChild(document.createElement('i'));
+  return w;
+}
+
+function render(){
+  document.querySelectorAll('.cell').forEach(c=>{
+    c.classList.remove('path','target','besttgt');
+    c.onclick=null;
+    c.querySelectorAll('.pc').forEach(x=>x.remove());
+  });
+  const win=winnerOf(st), edit=$('edit').checked;
+
+  if(edit) document.querySelectorAll('.cell[id^="c-"]').forEach(cell=>{
+    const a=cell.id.split('-');
+    cell.onclick=()=>editPlace(+a[1], +a[2]);
+  });
+
+  ['R','Y'].forEach(side=>{
+    st[side].forEach(p=>{
+      if(p.done) return;
+      const r = side==='R' ? p.pos   : p.idx+1;
+      const c = side==='R' ? p.idx+1 : p.pos;
+      const el=document.createElement('div');
+      el.className='pc '+cls(side)+' '+(side==='R' ? (p.dir<0?'up':'down') : (p.dir>0?'right':'left'));
+      el.innerHTML='<span class="n">'+speed(p)+'</span>';
+      if(edit){
+        el.classList.add('live'); el.tabIndex=0;
+        el.onclick=e=>{ e.stopPropagation(); editPick(p); };
+      }else if(!win && !drawn() && side===st.turn && !isAI(side) && !thinking){
+        el.classList.add('live'); el.tabIndex=0;
+        el.onclick=e=>{ e.stopPropagation(); pick(p); };
+        el.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); pick(p); } };
+      }
+      if(sel===p || editSel===p) el.classList.add('sel');
+      if(!sel && hintMove && hintMove.side===side && hintMove.idx===p.idx) el.classList.add('best');
+      if(prev && prev.jumped.includes(p)) el.classList.add('doomed');
+      $('c-'+r+'-'+c).appendChild(el);
+    });
+  });
+
+  if(!sel && !edit && hintMove){
+    const p=st[hintMove.side][hintMove.idx];
+    if(!p.done){
+      const mv=simulate(st,p);
+      const r = p.side==='R' ? mv.pos : p.idx+1;
+      const c = p.side==='R' ? p.idx+1 : mv.pos;
+      const cell=$('c-'+r+'-'+c); if(cell) cell.classList.add('besttgt');
+    }
+  }
+
+  if(prev && sel){
+    prev.path.forEach(v=>{
+      const r = sel.side==='R' ? v : sel.idx+1;
+      const c = sel.side==='R' ? sel.idx+1 : v;
+      const cell=$('c-'+r+'-'+c); if(cell) cell.classList.add('path');
+    });
+    const r = sel.side==='R' ? prev.pos : sel.idx+1;
+    const c = sel.side==='R' ? sel.idx+1 : prev.pos;
+    const cell=$('c-'+r+'-'+c);
+    if(cell){
+      cell.classList.add('target');
+      if(!isAI(st.turn) && !thinking) cell.onclick=()=>confirmMove();
+    }
+  }
+
+  $('turnbar').classList.toggle('tappable', edit);
+  $('turnbar').onclick = edit ? flipTurn : null;
+  $('lbR').textContent=nm('R'); $('lbY').textContent=nm('Y');
+  $('first').options[0].text=nm('R'); $('first').options[1].text=nm('Y');
+  $('chip').style.background = cls(st.turn)==='R' ? 'var(--red)' : 'var(--amber)';
+  $('turnText').textContent = win ? '—'
+    : thinking ? nm(st.turn)+'AI 思考中…'
+    : nm(st.turn)+'の番' + (isAI(st.turn)?'（AI）':'')
+      + (MISERE?' / 負けるが勝ち':'') + (edit?' / 配置編集中（タップで手番交代）':'');
+  $('moveNo').textContent = (win||drawn() ? st.moves+'手で終了' : (st.moves+1)+'手目');
+  $('score').textContent = 'R '+goalsOf(st,'R')+' · Y '+goalsOf(st,'Y');
+  const victor = win ? (MISERE ? other(win) : win) : null;
+  $('winMsg').innerHTML = win ? '<span class="win">'+nm(victor)+'の勝ち'+(MISERE?'（'+nm(win)+'が先に4個）':'')+'</span>'
+                        : (drawn() ? '<span class="win">引き分け（'+DRAW_LIMIT+'手）</span>' : '');
+  $('undo').disabled = history.length===0 || thinking;
+  $('step').disabled = edit || !!win || drawn() || thinking || !isAI(st.turn) || $('auto').checked;
+  $('depth').hidden = $('lvl').value!=='custom';
+}
+
+/* ============ 操作 ============ */
+function pick(p){
+  if(sel===p){ confirmMove(); return; }
+  sel=p; prev=simulate(st,p); render();
+}
+function confirmMove(){
+  if(!sel||!prev) return;
+  history.push(JSON.parse(JSON.stringify(st)));
+  perform(st, sel, prev);
+  st.turn=other(st.turn); st.moves++;
+  sel=null; prev=null; hintMove=null; hintSeq++;
+  render(); schedule(); requestHint();
+}
+board.addEventListener('click',e=>{
+  if($('edit').checked) return;
+  if(e.target.closest('.pc')||e.target.closest('.target')) return;
+  sel=null; prev=null; render();
+});
+
+/* ---- 配置編集: コマ→マスの順にタップ。コマを2回タップで向き反転 ---- */
+function markDone(p){ p.done = (p.pos===homeEnd(p.side) && p.dir!==outDir(p.side)); }
+function editPick(p){
+  if(editSel===p){ p.dir=-p.dir; markDone(p); editSel=null; }
+  else editSel=p;
+  render();
+}
+function editPlace(r,c){
+  if(!editSel) return;
+  const p=editSel;
+  const lane = p.side==='R' ? (c===p.idx+1 ? r : -1) : (r===p.idx+1 ? c : -1);
+  if(lane<0 || lane>6) return;                       // 自分のレーン以外は置けない
+  if(lane>=1 && lane<=5){                            // 交差する相手コマとの重ね置きは不可
+    const foe = (p.side==='R' ? st.Y : st.R)[lane-1];
+    if(foe && !foe.done && foe.pos===p.idx+1) return;
+  }
+  history.push(JSON.parse(JSON.stringify(st)));
+  p.pos=lane; markDone(p); editSel=null;
+  render();
+}
+
+/* ============ 探索の実行（Workerで動かし画面を止めない） ============ */
+let worker='init', jobId=0; const jobs=new Map();
+function getWorker(){
+  if(worker!=='init') return worker;
+  try{
+    const src = RULES + `
+      onmessage=function(e){
+        const d=e.data;
+        MISERE=!!d.misere;
+        const ch=chooseMove(d.state, d.side, d.depth, d.budget);
+        postMessage({job:d.job, res: ch ? {idx:ch.p.idx, side:ch.p.side, depth:ch.depth, solved:ch.solved, nodes:ch.nodes} : null});
+      };`;
+    worker = new Worker(URL.createObjectURL(new Blob([src],{type:'text/javascript'})));
+  }catch(e){ worker=null; }
+  return worker;
+}
+const snapshot = () => JSON.parse(JSON.stringify(st));
+function ask(payload, cb){
+  const wk=getWorker(), id=++jobId;
+  if(wk){
+    jobs.set(id,cb);
+    wk.onmessage=e=>{ const c=jobs.get(e.data.job); if(c){ jobs.delete(e.data.job); c(e.data.res); } };
+    wk.postMessage(Object.assign({job:id}, payload));
+  }else{
+    setTimeout(()=>{
+      MISERE=payload.misere;
+      const ch=chooseMove(payload.state, payload.side, payload.depth, payload.budget);
+      cb(ch ? {idx:ch.p.idx, side:ch.p.side, depth:ch.depth, solved:ch.solved} : null);
+    },30);
+  }
+}
+const settings = () => ({state:snapshot(), side:st.turn, depth:depthOf(), budget:budgetMs(), misere:MISERE});
+
+/* --- AIの手番 --- */
+function schedule(){
+  clearTimeout(timer); timer=null;
+  if(winnerOf(st)||drawn()||thinking||$('edit').checked) return;
+  if(!isAI(st.turn)||!$('auto').checked) return;
+  timer=setTimeout(aiTurn, 120);
+}
+function aiTurn(){
+  if(thinking||winnerOf(st)||drawn()||!isAI(st.turn)||$('edit').checked) return;
+  thinking=true; sel=null; prev=null; hintMove=null; render();
+  const side=st.turn, seq=++aiSeq, t0=performance.now();
+  ask(settings(), res=>{
+    if(seq!==aiSeq) return;                        // 中断済みの思考は破棄
+    thinking=false;
+    if(!res){ render(); return; }
+    const p=st[res.side][res.idx];
+    sel=p; prev=simulate(st,p);                    // 予定手を提示してから着手
+    $('aiInfo').textContent = nm(side)+'AI: 深さ'+res.depth
+      + (res.solved?'（読み切り）':'') + ' / '+Math.round(performance.now()-t0)+'ms';
+    render();
+    setTimeout(()=>{ if(seq===aiSeq) confirmMove(); }, Math.max(180, delayMs()*0.6));
+  });
+}
+
+/* --- 人間の手番の最善手表示（AIと同じ設定で計算） --- */
+function requestHint(){
+  hintMove=null; hintSeq++;
+  const on = $('hint').checked && !$('edit').checked && !winnerOf(st) && !drawn() && !isAI(st.turn) && !thinking;
+  render();
+  if(!on) return;
+  const seq=hintSeq, t0=performance.now();
+  ask(settings(), res=>{
+    if(seq!==hintSeq || !res) return;
+    hintMove={side:res.side, idx:res.idx};
+    $('aiInfo').textContent = '最善手: 深さ'+res.depth + (res.solved?'（読み切り）':'')
+      + ' / '+Math.round(performance.now()-t0)+'ms' + (MISERE?'（負けるが勝ち）':'');
+    render();
+  });
+}
+
+function abortAI(){
+  aiSeq++; hintSeq++; thinking=false; hintMove=null;
+  clearTimeout(timer); timer=null; jobs.clear();
+  if(worker && worker!=='init'){ worker.terminate(); worker='init'; }
+}
+function newGame(){
+  abortAI(); st=initState($('first').value);
+  history=[]; sel=null; prev=null; $('aiInfo').textContent=''; render(); schedule(); requestHint();
+}
+
+$('step').onclick=aiTurn;
+$('auto').onchange=()=>{ render(); schedule(); };
+$('hint').onchange=requestHint;
+$('swap').onchange=render;
+$('edit').onchange=()=>{
+  editSel=null; sel=null; prev=null;
+  if($('edit').checked){ abortAI(); $('auto').checked=false; }
+  render(); requestHint(); schedule();
+};
+function flipTurn(){
+  if(!$('edit').checked) return;
+  history.push(JSON.parse(JSON.stringify(st)));
+  st.turn=other(st.turn); render();
+}
+$('misere').onchange=()=>{ MISERE=$('misere').checked; requestHint(); };
+$('lvl').onchange=()=>{ render(); requestHint(); };
+$('depth').onchange=requestHint;
+$('tmo').onchange=requestHint;
+['pR','pY'].forEach(id=>$(id).onchange=()=>{ sel=null; prev=null; render(); schedule(); requestHint(); });
+$('first').onchange=newGame;
+$('reset').onclick=newGame;
+$('undo').onclick=()=>{
+  if(!history.length) return;
+  abortAI(); $('auto').checked=false;
+  st=history.pop(); sel=null; prev=null; render(); requestHint();
+};
+
+st=initState('R');
+buildBoard(); render();
+</script>
+</body>
+</html>
