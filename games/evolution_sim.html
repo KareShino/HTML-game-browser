@@ -1,0 +1,1488 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>生態系・生命進化シミュレーション</title>
+<style>
+:root{
+  --ink:#0d1318; --field:#141d24; --panel:rgba(13,19,24,.9); --line:#2b3a45;
+  --text:#d3dde2; --dim:#7c8d98; --acc:#e0a04a; --acc2:#63b9c1;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--ink);color:var(--text);
+  font-family:"Hiragino Sans","Noto Sans JP",system-ui,sans-serif;overflow:hidden;
+  -webkit-font-smoothing:antialiased}
+canvas#world{display:block;position:fixed;left:0;top:0;width:100vw;height:100vh;
+  touch-action:none;cursor:crosshair}
+.panel{position:fixed;background:var(--panel);border:1px solid var(--line);
+  backdrop-filter:blur(6px);font-size:12px;line-height:1.5}
+#hud{top:0;left:0;padding:10px 14px;border-left:0;border-top:0}
+#hud .t{font:600 11px/1 ui-monospace,monospace;letter-spacing:.14em;color:var(--dim)}
+#hud .clock{font:600 21px/1.2 ui-monospace,monospace;color:var(--acc);margin-top:6px}
+#hud .row{font:12px/1.6 ui-monospace,monospace;color:var(--dim)}
+#hud .row b{color:var(--text);font-weight:600}
+#log{top:132px;left:0;width:250px;max-height:200px;overflow:hidden;padding:8px 12px;
+  border-left:0;font:11px/1.5 ui-monospace,monospace;color:var(--dim)}
+#log .h{color:var(--acc2);letter-spacing:.1em;margin-bottom:4px}
+#log div.e{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#bar{bottom:0;left:0;right:0;display:flex;gap:14px;align-items:center;
+  padding:8px 12px;border-bottom:0;border-left:0;border-right:0;flex-wrap:wrap}
+button{background:transparent;border:1px solid var(--line);color:var(--dim);
+  font:12px/1 ui-monospace,monospace;padding:7px 10px;cursor:pointer;border-radius:2px}
+button:hover{color:var(--text);border-color:var(--dim)}
+button.on{color:var(--ink);background:var(--acc);border-color:var(--acc);font-weight:700}
+button:focus-visible{outline:2px solid var(--acc2);outline-offset:2px}
+.grp{display:flex;gap:4px;align-items:center}
+.lbl{font:11px/1 ui-monospace,monospace;color:var(--dim);letter-spacing:.08em}
+input[type=range]{width:120px;accent-color:var(--acc)}
+#info{top:0;right:0;width:290px;max-height:100vh;overflow-y:auto;padding:12px;
+  border-right:0;border-top:0;display:none}
+#info h3{margin:0 0 8px;font:600 12px/1 ui-monospace,monospace;letter-spacing:.1em;color:var(--acc)}
+#info .sec{margin:10px 0 4px;font:11px/1 ui-monospace,monospace;color:var(--acc2);
+  letter-spacing:.1em;border-bottom:1px solid var(--line);padding-bottom:4px}
+#info table{width:100%;border-collapse:collapse;font:11px/1.5 ui-monospace,monospace}
+#info td{padding:1px 0}
+#info td:first-child{color:var(--dim)}
+#info td:last-child{text-align:right}
+#stats{inset:auto;left:50%;top:50%;transform:translate(-50%,-50%);width:min(780px,94vw);
+  height:min(680px,88vh);padding:12px;display:none;overflow:auto}
+#stats .hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+#stats h3{margin:0;font:600 12px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--acc)}
+#gc{width:100%;display:block}
+.hint{position:fixed;bottom:52px;left:12px;font:11px/1.5 ui-monospace,monospace;color:var(--dim);
+  pointer-events:none;opacity:.7}
+#setup{position:fixed;inset:0;background:rgba(8,12,16,.94);z-index:20;display:none;
+  flex-direction:column;padding:0}
+#setup.show{display:flex}
+#setup .top{display:flex;justify-content:space-between;align-items:center;
+  padding:12px 18px;border-bottom:1px solid var(--line)}
+#setup h2{margin:0;font:600 14px/1 ui-monospace,monospace;letter-spacing:.14em;color:var(--acc)}
+#setup .body{flex:1;overflow-y:auto;padding:14px 18px 24px}
+#setup .sec{margin:0 0 6px;font:11px/1 ui-monospace,monospace;letter-spacing:.12em;
+  color:var(--acc2);border-bottom:1px solid var(--line);padding-bottom:5px;margin-top:18px}
+#setup .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:4px 20px}
+#setup .f{display:grid;grid-template-columns:1fr 108px 58px;align-items:center;gap:8px;
+  font:11px/1.6 ui-monospace,monospace;color:var(--dim);padding:2px 0}
+#setup .f b{color:var(--text);font-weight:400}
+#setup .f .v{text-align:right;color:var(--acc);font-variant-numeric:tabular-nums}
+#setup select{background:#141d24;color:var(--text);border:1px solid var(--line);
+  font:11px ui-monospace,monospace;padding:3px}
+#setup .foot{display:flex;gap:8px;align-items:center;padding:10px 18px;border-top:1px solid var(--line)}
+#setup .note{color:var(--dim);font:11px/1.4 ui-monospace,monospace;margin-left:auto}
+@media(max-width:640px){#info{width:220px}#hud .clock{font-size:17px}#log{display:none}
+  #setup .f{grid-template-columns:1fr 76px 50px}}
+</style>
+
+<canvas id="world"></canvas>
+
+<div class="panel" id="hud">
+  <div class="t">経過時間</div>
+  <div class="clock" id="clock">00:00:00</div>
+  <div class="row">個体 <b id="pop">0</b> ／ 植物 <b id="plc">0</b> ／ 世代 <b id="gen">0</b></div>
+  <div class="row" id="fps">—</div>
+</div>
+
+<div class="panel" id="log"><div class="h">出来事</div><div id="logb"></div></div>
+<div class="panel" id="info"></div>
+
+<div class="panel" id="stats">
+  <div class="hd"><h3>統計</h3><button id="closeStats">閉じる</button></div>
+  <canvas id="gc"></canvas>
+</div>
+
+<div class="hint">ドラッグ=移動／ホイール=ズーム／生物をクリック=選択</div>
+
+<div id="setup" class="show">
+  <div class="top">
+    <h2>世界の設定</h2>
+    <button id="setupDefault">既定に戻す</button>
+  </div>
+  <div class="body" id="setupBody"></div>
+  <div class="foot">
+    <button id="setupStart" class="on">この設定で開始</button>
+    <button id="setupCancel">閉じる</button>
+    <span class="note">開始すると現在の世界は作り直されます</span>
+  </div>
+</div>
+
+<div class="panel" id="bar">
+  <div class="grp" id="speeds"></div>
+  <div class="grp">
+    <span class="lbl">突然変異率</span>
+    <input type="range" id="mut" min="0" max="200" value="20">
+    <span class="lbl" id="mutv" style="width:44px">×1.0</span>
+  </div>
+  <div class="grp">
+    <button id="btnColor">系統色</button>
+    <button id="btnStats">統計</button>
+    <button id="btnFollow">追従</button>
+    <button id="btnFov">視野</button>
+    <button id="btnSetup">設定</button>
+    <button id="btnReset">初期化</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+//============================ 定数 ============================
+let W=3000,H=3000,MAXPOP=500,MAXPLANT=1300,MAXLIFE=240;
+const DT=0.1,SUPER=999999,CELL=130;
+let GX=1,GY=1;
+const C={basal:.013,move:.00038,eye:.00004,dig:.010,bite:.0016,limb:.008,seg:.008,
+         energyPerMass:6.0,growCost:0.8,digestRate:.30,wasteFrac:.5};
+const rnd=Math.random,TAU=Math.PI*2;
+function gauss(){let u=0,v=0;while(u===0)u=rnd();while(v===0)v=rnd();
+  return Math.sqrt(-2*Math.log(u))*Math.cos(TAU*v);}
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+function angDiff(a,b){let d=a-b;while(d>Math.PI)d-=TAU;while(d<-Math.PI)d+=TAU;return d;}
+let mutRate=1.0,simTime=0,macroRate=1.0;
+
+//============================ 設定 ============================
+const CFGSPEC=[
+ {name:"世界",items:[
+  ["worldSize","フィールド一辺",1000,6000,100,3000],
+  ["wallCount","壁の数",0,40,1,16],
+  ["initPop","初期個体数",5,400,5,90],
+  ["initPlants","初期植物数",30,2000,10,650],
+  ["maxPop","個体数の上限",30,1200,10,500],
+  ["maxPlant","植物数の上限",100,3000,50,1300]
+ ]},
+ {name:"進化",items:[
+  ["mutRate","突然変異率",0,10,.1,1],
+  ["initSpread","初期個体のばらつき",0,3,.05,.3],
+  ["macro","大変異の起こりやすさ",0,5,.1,1],
+  ["maxLife","寿命の上限",30,600,10,240],
+  ["modeLock","繁殖方法を固定する（1で固定）",0,1,1,0]
+ ]},
+ {name:"エネルギー収支",items:[
+  ["basal","基礎代謝コスト",0,.05,.001,.013],
+  ["move","移動コスト",0,.002,.00002,.00038],
+  ["eye","視覚の維持コスト",0,.0004,.00001,.00004],
+  ["dig","消化能力の維持コスト",0,.04,.001,.010],
+  ["bite","口の維持コスト",0,.008,.0002,.0016],
+  ["limb","肢の維持コスト",0,.04,.001,.008],
+  ["seg","体節の維持コスト",0,.04,.001,.008],
+  ["energyPerMass","質量→エネルギー変換",1,12,.1,6],
+  ["growCost","成長コスト",.1,6,.1,.8],
+  ["digestRate","消化速度",.05,1.5,.05,.30]
+ ]},
+ {name:"共通祖先：身体",items:[
+  ["a_sizeMax","最大サイズ",1.6,26,.1,5.5],
+  ["a_growthRate","成長速度",.03,1.2,.01,.35],
+  ["a_matureFrac","成熟サイズ比",.3,1,.02,.6],
+  ["a_lifespan","寿命",12,600,1,80],
+  ["a_metabolism","基礎代謝",.25,3,.05,1],
+  ["a_aspect","縦横比",.45,2.4,.05,1],
+  ["a_speed","移動速度",0,50,.5,20],
+  ["a_turnRate","旋回性能",.2,6,.1,2.2],
+  ["a_segCount","体節数",1,6,1,2],
+  ["a_segTaper","体節の細り",.35,1.15,.05,.8],
+  ["a_segGap","体節の間隔",.55,1.15,.05,.85],
+  ["a_flex","関節の可動",0,1,.05,.35],
+  ["a_undRate","体のうねり",0,3,.1,1.2],
+  ["a_limbPairs","肢の対数",0,3,1,0],
+  ["a_limbLen","肢の長さ",.3,2.6,.1,1]
+ ]},
+ {name:"共通祖先：目と口",items:[
+  ["a_eyeCount","目の数",0,6,1,2],
+  ["a_eyeFov","視野角",.1,3,.05,1.1],
+  ["a_eyeRange","視距離",10,260,5,110],
+  ["a_mouthSize","口の大きさ",.05,1,.05,.5],
+  ["a_gape","開口サイズ",.5,30,.5,6],
+  ["a_biteForce","噛む力",.1,18,.1,2],
+  ["a_biteSpeed","噛む速度",.2,3.5,.1,1.2],
+  ["a_plantProc","植物処理能力",0,1,.05,.7],
+  ["a_meatProc","肉処理能力",0,1,.05,.2]
+ ]},
+ {name:"共通祖先：消化と行動",items:[
+  ["a_digPlant","植物消化効率",0,1,.05,.65],
+  ["a_digMeat","肉消化効率",0,1,.05,.15],
+  ["a_digCarrion","死肉消化効率",0,1,.05,.15],
+  ["a_digWaste","排泄物消化効率",0,1,.05,.1],
+  ["a_stomachCap","胃容量",2,140,1,20],
+  ["a_attrFood","餌への接近傾向",-1,2.2,.05,1],
+  ["a_attrCreature","他個体への傾向",-2,2,.05,-.2],
+  ["a_attrKin","近縁個体への傾向",-2,2,.05,0],
+  ["a_randomness","探索のランダム性",0,1,.05,.45],
+  ["a_kinRecog","血縁認識能力",0,1,.05,.2],
+  ["a_attach","付着能力",0,1,.05,.05],
+  ["a_drain","エネルギー吸収",0,1,.05,0]
+ ]},
+ {name:"共通祖先：繁殖",items:[
+  ["a_mode","繁殖方法",0,0,0,"fission","select"],
+  ["a_reproEnergy","繁殖開始エネルギー",6,320,1,30],
+  ["a_reproInterval","繁殖間隔",1,90,.5,6],
+  ["a_offspringCount","子の数",1,12,1,2],
+  ["a_invest","子1体への投資量",1,110,1,12],
+  ["a_childSizeFrac","子の初期サイズ比",.05,.9,.05,.5]
+ ]},
+ {name:"共通祖先：配偶者の好み（有性生殖のみ作用）",items:[
+  ["a_choosiness","選り好みの強さ",0,1,.05,.2],
+  ["a_mateRange","求愛の探索範囲",30,900,10,260],
+  ["a_prefSize","大きい相手を好む",-1,1,.05,0],
+  ["a_prefSpeed","素早い相手を好む",-1,1,.05,0],
+  ["a_prefOrn","装飾（肢・目）が多い相手を好む",-1,1,.05,0],
+  ["a_prefKin","血縁が近い相手を好む",-1,1,.05,0]
+ ]},
+ {name:"植物の祖先",items:[
+  ["p_maxMass","最大質量",1,26,.5,7],
+  ["p_grow","成長速度",.05,1.2,.05,.5],
+  ["p_spread","繁殖力",.05,1.4,.05,.5],
+  ["p_seedDist","種の飛距離",15,260,5,70],
+  ["p_tough","硬さ",0,1,.05,.15],
+  ["p_nutri","栄養価",0,1,.05,.4]
+ ]}
+];
+const CFG={};
+for(const sec of CFGSPEC)for(const it of sec.items)CFG[it[0]]=it[5];
+function applyCFG(){
+  W=H=CFG.worldSize;
+  MAXPOP=CFG.maxPop;MAXPLANT=CFG.maxPlant;MAXLIFE=CFG.maxLife;
+  mutRate=CFG.mutRate;macroRate=CFG.macro;
+  C.basal=CFG.basal;C.move=CFG.move;C.eye=CFG.eye;C.dig=CFG.dig;C.bite=CFG.bite;
+  C.limb=CFG.limb;C.seg=CFG.seg;C.energyPerMass=CFG.energyPerMass;
+  C.growCost=CFG.growCost;C.digestRate=CFG.digestRate;
+  rebuildGrid();
+}
+
+//============================ 出来事ログ ============================
+const logs=[];
+function logEvent(txt){
+  const t=simTime|0;
+  logs.unshift(String((t/60|0)).padStart(2,"0")+":"+String(t%60).padStart(2,"0")+" "+txt);
+  if(logs.length>9)logs.pop();
+  document.getElementById("logb").innerHTML=logs.map(s=>'<div class="e">'+s+'</div>').join("");
+}
+
+//============================ 生物ゲノム ============================
+// key : [min,max,変異幅(レンジ比)]
+const GENES={
+  sizeMax:[1.6,26,.07], growthRate:[.03,1.2,.07], matureFrac:[.3,1,.05],
+  lifespan:[12,600,.07], metabolism:[.25,3,.07],
+  aspect:[.45,2.4,.05], speed:[0,50,.07], turnRate:[.2,6,.07],
+  segCount:[1,6,.09], segTaper:[.35,1.15,.07], segGap:[.55,1.15,.06],
+  flex:[0,1,.09], undRate:[0,3,.09],
+  limbPairs:[0,3,.11], limbLen:[.3,2.6,.09], limbAngle:[.1,1.5,.09], limbJoint:[-1.4,1.4,.09],
+  mouthSize:[.05,1,.07], gape:[.5,30,.08], biteForce:[.1,18,.08], biteSpeed:[.2,3.5,.07],
+  plantProc:[0,1,.07], meatProc:[0,1,.07],
+  digPlant:[0,1,.07], digMeat:[0,1,.07], digCarrion:[0,1,.07], digWaste:[0,1,.07],
+  stomachCap:[2,140,.08],
+  attrFood:[-1,2.2,.08], attrCreature:[-2,2,.08], attrKin:[-2,2,.08], randomness:[0,1,.07],
+  kinRecog:[0,1,.07], attach:[0,1,.07], drain:[0,1,.07],
+  reproEnergy:[6,320,.08], reproInterval:[1,90,.08], offspringCount:[1,12,.08],
+  invest:[1,110,.08], childSizeFrac:[.05,.9,.07],
+  prefSize:[-1,1,.09], prefSpeed:[-1,1,.09], prefOrn:[-1,1,.09], prefKin:[-1,1,.09],
+  choosiness:[0,1,.08], mateRange:[30,900,.08],
+  pattern:[0,2.99,.16]
+};
+const MODES=["fission","budding","egg","sexual","spore","fragment"];
+const MODEJP={fission:"分裂",budding:"出芽",egg:"卵",sexual:"有性生殖",spore:"胞子",fragment:"分裂片"};
+const MODECOL={fission:"#63b9c1",budding:"#8bcf7a",egg:"#e0a04a",sexual:"#d97ba8",spore:"#9d8ce0",fragment:"#d96b5a"};
+const GJP={sizeMax:"最大サイズ",growthRate:"成長速度",lifespan:"寿命",metabolism:"基礎代謝",
+  aspect:"縦横比",speed:"移動速度",turnRate:"旋回",segCount:"体節数",flex:"関節可動",
+  undRate:"体のうねり",limbPairs:"肢の対数",limbLen:"肢の長さ",gape:"開口",biteForce:"噛む力",
+  digPlant:"植物消化",digMeat:"肉消化",digCarrion:"死肉消化",digWaste:"排泄物消化",
+  attach:"付着",drain:"吸収",kinRecog:"血縁認識",offspringCount:"子の数",invest:"投資量",
+  stomachCap:"胃容量",mouthSize:"口の大きさ",biteSpeed:"噛む速度",plantProc:"植物処理",
+  meatProc:"肉処理",attrFood:"餌への接近",attrCreature:"他個体反応",attrKin:"近縁反応",
+  randomness:"探索randomness",reproEnergy:"繁殖開始E",reproInterval:"繁殖間隔",
+  childSizeFrac:"子の初期サイズ",matureFrac:"成熟比",segTaper:"体節の細り",segGap:"体節間隔",
+  prefSize:"大きさの好み",prefSpeed:"素早さの好み",prefOrn:"装飾の好み",prefKin:"血縁の好み",
+  choosiness:"選り好みの強さ",mateRange:"求愛の探索範囲",
+  limbAngle:"肢の角度",limbJoint:"肢の関節",pattern:"模様"};
+
+function baseGenome(){
+  const g={
+    sizeMax:CFG.a_sizeMax,growthRate:CFG.a_growthRate,matureFrac:CFG.a_matureFrac,
+    lifespan:CFG.a_lifespan,metabolism:CFG.a_metabolism,
+    aspect:CFG.a_aspect,speed:CFG.a_speed,turnRate:CFG.a_turnRate,
+    segCount:CFG.a_segCount,segTaper:CFG.a_segTaper,segGap:CFG.a_segGap,
+    flex:CFG.a_flex,undRate:CFG.a_undRate,
+    limbPairs:CFG.a_limbPairs,limbLen:CFG.a_limbLen,limbAngle:.7,limbJoint:.5,
+    mouthSize:CFG.a_mouthSize,gape:CFG.a_gape,biteForce:CFG.a_biteForce,biteSpeed:CFG.a_biteSpeed,
+    plantProc:CFG.a_plantProc,meatProc:CFG.a_meatProc,
+    digPlant:CFG.a_digPlant,digMeat:CFG.a_digMeat,digCarrion:CFG.a_digCarrion,
+    digWaste:CFG.a_digWaste,stomachCap:CFG.a_stomachCap,
+    attrFood:CFG.a_attrFood,attrCreature:CFG.a_attrCreature,attrKin:CFG.a_attrKin,
+    randomness:CFG.a_randomness,
+    kinRecog:CFG.a_kinRecog,attach:CFG.a_attach,drain:CFG.a_drain,
+    reproEnergy:CFG.a_reproEnergy,reproInterval:CFG.a_reproInterval,
+    offspringCount:CFG.a_offspringCount,invest:CFG.a_invest,childSizeFrac:CFG.a_childSizeFrac,
+    prefSize:CFG.a_prefSize,prefSpeed:CFG.a_prefSpeed,prefOrn:CFG.a_prefOrn,prefKin:CFG.a_prefKin,
+    choosiness:CFG.a_choosiness,mateRange:CFG.a_mateRange,
+    pattern:0,mode:CFG.a_mode,
+    eyes:[],marker:[rnd(),.5,.5,.5,.5,.5]
+  };
+  const n=Math.round(CFG.a_eyeCount);
+  for(let i=0;i<n;i++){
+    const a=n===1?0:(i/(n-1)-.5)*1.8;
+    g.eyes.push({ang:a,dir:a,fov:CFG.a_eyeFov,range:CFG.a_eyeRange});
+  }
+  return g;
+}
+function copyGenome(g){
+  const n=Object.assign({},g);
+  n.eyes=g.eyes.map(e=>Object.assign({},e));
+  n.marker=g.marker.slice();
+  return n;
+}
+const GKEYS=Object.keys(GENES);
+function mutate(g,rate,report){
+  const r=rate*mutRate;
+  if(r<=0)return g;
+  for(const k of GKEYS){
+    const [lo,hi,s]=GENES[k];
+    g[k]=clamp(g[k]+gauss()*s*(hi-lo)*r,lo,hi);
+  }
+  for(const e of g.eyes){
+    e.ang=clamp(e.ang+gauss()*.25*r,-Math.PI,Math.PI);
+    e.dir=clamp(e.dir+gauss()*.3*r,-Math.PI,Math.PI);
+    e.fov=clamp(e.fov+gauss()*.18*r,.08,3.1);
+    e.range=clamp(e.range+gauss()*22*r,10,260);
+  }
+  if(rnd()<.03*r&&g.eyes.length<6){
+    const a=(rnd()-.5)*Math.PI*2;
+    g.eyes.push({ang:a,dir:a*.6,fov:.6+rnd()*1.4,range:40+rnd()*140});
+  }
+  if(rnd()<.03*r&&g.eyes.length>0)g.eyes.splice((rnd()*g.eyes.length)|0,1);
+  for(let i=0;i<g.marker.length;i++)g.marker[i]=clamp(g.marker[i]+gauss()*.022*r,0,1);
+
+  // ---- まれな大変異：新しい形質の出現 ----
+  if(rnd()<.010*r*macroRate){
+    const k=GKEYS[(rnd()*GKEYS.length)|0],[lo,hi]=GENES[k];
+    g[k]=lo+rnd()*(hi-lo);
+    if(report)report("新形質 "+(GJP[k]||k));
+  }
+  if(rnd()<.004*r*macroRate&&!CFG.modeLock){
+    const m=MODES[(rnd()*MODES.length)|0];
+    if(m!==g.mode){g.mode=m;if(report)report("繁殖方法が"+MODEJP[m]+"へ");}
+  }
+  if(rnd()<.008*r*macroRate){
+    g.limbPairs=clamp(Math.round(g.limbPairs)+(rnd()<.5?-1:1),0,3);
+    if(report)report("肢の対数が"+Math.round(g.limbPairs)+"に");
+  }
+  if(rnd()<.008*r*macroRate){
+    g.segCount=clamp(Math.round(g.segCount)+(rnd()<.5?-1:1),1,6);
+    if(report)report("体節が"+Math.round(g.segCount)+"に");
+  }
+  return g;
+}
+function crossGenome(a,b){
+  const g=copyGenome(rnd()<.5?a:b);
+  for(const k of GKEYS)g[k]=rnd()<.5?a[k]:b[k];
+  g.mode=rnd()<.5?a.mode:b.mode;
+  g.eyes=(rnd()<.5?a:b).eyes.map(e=>Object.assign({},e));
+  for(let i=0;i<g.marker.length;i++)g.marker[i]=(a.marker[i]+b.marker[i])*.5;
+  return g;
+}
+
+//============================ 植物ゲノム ============================
+const PGENES={
+  maxMass:[1,26,.09], grow:[.05,1.2,.09], spread:[.05,1.4,.09],
+  seedDist:[15,260,.10], tough:[0,1,.09], nutri:[0,1,.09], hue:[0,1,.05], form:[0,2.99,.15]
+};
+const PKEYS=Object.keys(PGENES);
+function basePlantGenome(){return {maxMass:CFG.p_maxMass,grow:CFG.p_grow,spread:CFG.p_spread,
+  seedDist:CFG.p_seedDist,tough:CFG.p_tough,nutri:CFG.p_nutri,hue:.32,form:0};}
+function mutatePlant(g,rate){
+  const r=rate*mutRate;
+  const n=Object.assign({},g);
+  if(r<=0)return n;
+  for(const k of PKEYS){const[lo,hi,s]=PGENES[k];n[k]=clamp(n[k]+gauss()*s*(hi-lo)*r,lo,hi);}
+  if(rnd()<.008*r*macroRate){const k=PKEYS[(rnd()*PKEYS.length)|0],[lo,hi]=PGENES[k];n[k]=lo+rnd()*(hi-lo);}
+  return n;
+}
+// 成長は硬さ・栄養価とトレードオフ
+// 栄養価が高い＝成長も速いが食べられやすい／硬い＝守れるが成長は遅い
+const plantGrowRate=g=>g.grow*(1-g.tough*.5)*(.45+g.nutri*.75);
+
+//============================ 空間ハッシュ ============================
+let grid=[];
+function rebuildGrid(){
+  GX=Math.ceil(W/CELL);GY=Math.ceil(H/CELL);
+  grid=new Array(GX*GY);
+  for(let i=0;i<grid.length;i++)grid[i]=[];
+}
+rebuildGrid();
+function gridClear(){for(let i=0;i<grid.length;i++)grid[i].length=0;}
+function gridAdd(o){
+  const cx=(o.x/CELL)|0,cy=(o.y/CELL)|0;
+  if(cx<0||cy<0||cx>=GX||cy>=GY)return;
+  grid[cy*GX+cx].push(o);
+}
+const QBUF=[];
+function gridQuery(x,y,r){
+  QBUF.length=0;
+  const x0=Math.max(0,((x-r)/CELL)|0),x1=Math.min(GX-1,((x+r)/CELL)|0);
+  const y0=Math.max(0,((y-r)/CELL)|0),y1=Math.min(GY-1,((y+r)/CELL)|0);
+  for(let cy=y0;cy<=y1;cy++)for(let cx=x0;cx<=x1;cx++){
+    const b=grid[cy*GX+cx];
+    for(let i=0;i<b.length;i++)QBUF.push(b[i]);
+  }
+  return QBUF;
+}
+
+//============================ 世界 ============================
+let creatures=[],things=[],walls=[],tick=0,maxGen=0,plantCount=0;
+const src={plant:0,meat:0,carrion:0,waste:0,drain:0};
+
+function makeWalls(){
+  walls=[];const t=40;
+  walls.push({x:0,y:0,w:W,h:t},{x:0,y:H-t,w:W,h:t},{x:0,y:0,w:t,h:H},{x:W-t,y:0,w:t,h:H});
+  for(let i=0;i<CFG.wallCount;i++){
+    const hz=rnd()<.5;
+    const w=hz?200+rnd()*520:26+rnd()*30,h=hz?26+rnd()*30:200+rnd()*520;
+    walls.push({x:150+rnd()*(W-300-w),y:150+rnd()*(H-300-h),w,h});
+  }
+}
+function inWall(x,y,r){
+  for(const s of walls)if(x+r>s.x&&x-r<s.x+s.w&&y+r>s.y&&y-r<s.y+s.h)return s;
+  return null;
+}
+function resolveWall(o){
+  const r=o.rad;
+  for(const s of walls){
+    if(o.x+r<=s.x||o.x-r>=s.x+s.w||o.y+r<=s.y||o.y-r>=s.y+s.h)continue;
+    const l=o.x+r-s.x,rr=s.x+s.w-(o.x-r),t=o.y+r-s.y,b=s.y+s.h-(o.y-r);
+    const m=Math.min(l,rr,t,b);
+    if(m===l)o.x=s.x-r;else if(m===rr)o.x=s.x+s.w+r;
+    else if(m===t)o.y=s.y-r;else o.y=s.y+s.h+r;
+    o.hitWall=true;
+  }
+}
+
+//============================ 物体 ============================
+function Thing(kind,x,y,mass,extra){
+  const o={kind,x,y,mass,age:0,dead:false,rad:1,hatch:0,genome:null,energy:0,g:null,seedT:0};
+  if(extra)Object.assign(o,extra);
+  o.rad=thingRad(o);
+  return o;
+}
+function thingRad(o){
+  if(o.kind==="plant")return 1.5+o.mass*.42;
+  if(o.kind==="corpse")return 1.5+o.mass*.35;
+  if(o.kind==="waste")return 1.2+o.mass*.5;
+  return 1.5+o.mass*.5;
+}
+function spawnPlant(x,y,g){
+  if(plantCount>=MAXPLANT)return;
+  if(x<12||y<12||x>W-12||y>H-12)return;
+  if(inWall(x,y,4))return;
+  things.push(Thing("plant",x,y,.5,{g:g||basePlantGenome(),seedT:2+rnd()*6}));
+}
+function updateThings(dt){
+  let plants=0;
+  for(let i=things.length-1;i>=0;i--){
+    const o=things[i];
+    o.age+=dt;
+    if(o.kind==="plant"){
+      plants++;
+      const g=o.g;
+      if(o.mass<g.maxMass)o.mass=Math.min(g.maxMass,o.mass+plantGrowRate(g)*dt);
+      // 繁殖
+      o.seedT-=dt*g.spread*(o.mass/g.maxMass);
+      if(o.seedT<=0){
+        o.seedT=6+rnd()*10;
+        if(o.mass>g.maxMass*.5&&plants<MAXPLANT){
+          o.mass*=.82;
+          const a=rnd()*TAU,d=10+rnd()*g.seedDist;
+          spawnPlant(o.x+Math.cos(a)*d,o.y+Math.sin(a)*d,mutatePlant(g,1));
+        }
+      }
+    }else if(o.kind==="corpse"){
+      o.mass-=.09*dt;if(o.age>110)o.mass-=.4*dt;
+    }else if(o.kind==="waste"){
+      o.mass-=.10*dt;if(o.age>70)o.mass-=.4*dt;
+      if(rnd()<.09*dt){ // 排泄物は植物の成長を促す
+        const l=gridQuery(o.x,o.y,60);
+        for(const p of l)if(p.kind==="plant"&&p.mass<p.g.maxMass){p.mass+=.5;p.seedT-=1;break;}
+      }
+    }else{
+      o.hatch-=dt;
+      if(o.hatch<=0){
+        if(o.fail)o.dead=true;
+        else if(creatures.length<MAXPOP){
+          creatures.push(newCreature(o.genome,o.x,o.y,rnd()*TAU,o.energy,o.gen,o.hsize));
+          o.dead=true;
+        }else if(o.kind==="spore"&&o.age<160&&o.energy>2){
+          o.hatch=3+rnd()*6;o.energy*=.88;o.mass*=.96; // 休眠は続けられるが蓄えは減る
+        }
+        else o.dead=true;
+      }
+    }
+    if(o.mass<=.02)o.dead=true;
+    if(o.dead){things[i]=things[things.length-1];things.pop();continue;}
+    o.rad=thingRad(o);
+  }
+  if(plants<12){ // 全滅保険
+    for(let k=0;k<6;k++)spawnPlant(60+rnd()*(W-120),60+rnd()*(H-120));
+  }
+  return plants;
+}
+
+//============================ 生物 ============================
+let nextId=1;
+function newCreature(g,x,y,ang,energy,gen,sizeOverride){
+  const size=Math.max(.7,sizeOverride||g.sizeMax*g.childSizeFrac);
+  const c={kind:"creature",id:nextId++,g,x,y,ang,size,rad:size,
+    energy,age:0,dead:false,gen:gen||0,phase:rnd()*TAU,
+    stomach:{plant:0,meat:0,carrion:0,waste:0},stMass:0,
+    wasteAcc:0,reproT:g.reproInterval*(.5+rnd()),
+    seen:[],host:null,attOff:0,attDist:0,hitWall:false,wander:rnd()*TAU,
+    segs:[],limbPh:rnd()*TAU,regen:0,budOf:null,budChild:null,
+    sex:rnd()<.5?0:1,mateTarget:null,mateWait:0,atkT:0,hitT:0,bites:0};
+  const n=Math.max(1,Math.round(g.segCount));
+  for(let i=0;i<n;i++)c.segs.push({x,y,a:ang});
+  if(c.gen>maxGen)maxGen=c.gen;
+  return c;
+}
+function segRadius(c,i){return c.size*Math.pow(c.g.segTaper,i+1);}
+function bodyBulk(c){ // 維持コスト用の体積係数
+  let s=c.size*c.size;
+  const n=c.segs.length;
+  for(let i=0;i<n;i++){const r=segRadius(c,i);s+=r*r;}
+  return s;
+}
+function kinship(a,b){
+  const m=a.g.marker,n=b.g.marker;let s=0;
+  for(let i=0;i<m.length;i++)s+=Math.abs(m[i]-n[i]);
+  return clamp(1-(s/m.length)*4,0,1);
+}
+function foodValue(c,o){
+  const g=c.g;
+  if(o.kind==="plant")return g.digPlant*g.plantProc*(.4+o.g.nutri)*clamp(g.biteForce/(o.g.tough*9+1),0,1);
+  if(o.kind==="corpse")return g.digCarrion*g.meatProc;
+  if(o.kind==="waste")return g.digWaste;
+  return g.digMeat*g.meatProc*.7;
+}
+function preyValue(c,t){
+  const g=c.g;
+  return g.digMeat*g.meatProc*clamp(g.biteForce/(1+t.size*.9),0,1)*clamp(g.gape/(t.size+1),0,1);
+}
+// --- 配偶者選択 ---
+const nrmGene=(v,k)=>{const[lo,hi]=GENES[k];return clamp((v-lo)/(hi-lo),0,1)-.5;};
+function mateScore(c,t){
+  const g=c.g;
+  const orn=(Math.round(t.g.limbPairs)/3+Math.min(t.g.eyes.length,6)/6)/2-.5;
+  return g.prefSize*nrmGene(t.g.sizeMax,"sizeMax")*2
+       + g.prefSpeed*nrmGene(t.g.speed,"speed")*2
+       + g.prefOrn*orn*2
+       + g.prefKin*(kinship(c,t)-.5)*2;
+}
+// 相手が見つからない時間が長いほど基準は下がる
+const acceptThreshold=c=>c.g.choosiness*.8-.4-Math.min(.8,(c.mateWait||0)*.02);
+function mateReady(c){
+  const g=c.g;
+  return g.mode==="sexual"&&c.regen<=0&&!c.budOf&&
+    c.size>=g.sizeMax*g.matureFrac*.9&&c.energy>g.invest*.6+6;
+}
+let readyMates=[];
+function findMate(c){
+  let best=null,bs=-1e9;
+  const r2=c.g.mateRange*c.g.mateRange;
+  const list=readyMates;
+  for(let i=0;i<list.length;i++){
+    const o=list[i];
+    if(o===c||o.dead)continue;
+    if(o.sex===c.sex)continue;
+    const dx=o.x-c.x,dy=o.y-c.y;
+    if(dx*dx+dy*dy>r2)continue;
+    const sc=mateScore(c,o);
+    if(sc<acceptThreshold(c))continue;      // 自分が相手を受け入れるか
+    if(mateScore(o,c)<acceptThreshold(o))continue; // 相手も自分を受け入れるか
+    if(sc>bs){bs=sc;best=o;}
+  }
+  return best;
+}
+
+function sense(c){
+  c.seen.length=0;
+  let maxR=0;
+  for(const e of c.g.eyes)if(e.range>maxR)maxR=e.range;
+  if(maxR<=0)return;
+  const list=gridQuery(c.x,c.y,maxR);let n=0;
+  for(let i=0;i<list.length;i++){
+    const o=list[i];
+    if(o===c||o.dead)continue;
+    const dx=o.x-c.x,dy=o.y-c.y,d2=dx*dx+dy*dy;
+    if(d2>maxR*maxR)continue;
+    const a=Math.atan2(dy,dx),d=Math.sqrt(d2);
+    for(const e of c.g.eyes){
+      if(d>e.range)continue;
+      if(Math.abs(angDiff(a,c.ang+e.dir))<=e.fov*.5){c.seen.push(o);n++;break;}
+    }
+    if(n>22)break;
+  }
+}
+function updateSegs(c,dt,motion){
+  const g=c.g,n=c.segs.length;
+  c.phase+=(1+g.undRate*motion)*dt*2.2;
+  let px=c.x,py=c.y,pa=c.ang;
+  for(let i=0;i<n;i++){
+    const s=c.segs[i];
+    const want=pa+Math.sin(c.phase-i*.9)*g.flex*.55;
+    s.a+=angDiff(want,s.a)*Math.min(1,10*dt);
+    const d=(c.size+segRadius(c,i))*g.segGap;
+    s.x=px-Math.cos(s.a)*d;s.y=py-Math.sin(s.a)*d;
+    px=s.x;py=s.y;pa=s.a;
+  }
+  c.limbPh+=(2+motion*6)*dt;
+}
+
+function stepCreature(c,dt){
+  const g=c.g;
+  c.age+=dt;
+  const senility=c.age>g.lifespan*.75?1+(c.age/g.lifespan-.75)*2.4:1;
+  // 分裂片からの再生：しばらく代謝が高く繁殖できない
+  if(c.regen>0)c.regen-=dt;
+  if(c.atkT>0)c.atkT-=dt;
+  if(c.hitT>0)c.hitT-=dt;
+  // 出芽：芽は親に付いたまま育ち、十分育つと離れる
+  if(c.budOf){
+    if(c.budOf.dead||c.size>=g.sizeMax*g.matureFrac*.55){
+      if(c.budOf&&c.budOf.budChild===c)c.budOf.budChild=null;
+      c.budOf=null;c.host=null;
+    }
+  }
+  if(c.budChild&&(c.budChild.dead||c.budChild.budOf!==c))c.budChild=null;
+  if(c.host){
+    if(c.host.dead||g.attach<.15||rnd()<.0006)c.host=null;
+    else{
+      const a=c.host.ang+c.attOff;
+      c.x=c.host.x+Math.cos(a)*c.attDist;c.y=c.host.y+Math.sin(a)*c.attDist;
+      if(g.drain>.05){
+        const take=Math.min(c.host.energy,g.drain*c.size*.22*dt);
+        c.host.energy-=take;
+        const gain=take*g.digMeat;c.energy+=gain;src.drain+=gain;
+      }
+    }
+  }
+  if((tick+c.id)%3===0)sense(c);
+  // 求愛：条件を満たす間は相手を探し続け、見つけたら近づく
+  if(g.mode==="sexual"&&mateReady(c)&&(c.energy>g.reproEnergy||c.mateTarget)){
+    if(c.mateTarget&&(c.mateTarget.dead||!mateReady(c.mateTarget)||
+       Math.hypot(c.mateTarget.x-c.x,c.mateTarget.y-c.y)>g.mateRange*1.6))c.mateTarget=null;
+    if(c.mateTarget)c.mateWait=0;else c.mateWait=(c.mateWait||0)+dt;
+    if((tick+c.id)%6===0){
+      const m=findMate(c);
+      if(m)c.mateTarget=m;
+    }
+  }else{c.mateTarget=null;c.mateWait=0;}
+
+  let sx=0,sy=0;
+  for(let i=0;i<c.seen.length;i++){
+    const o=c.seen[i];
+    if(o.dead)continue;
+    const dx=o.x-c.x,dy=o.y-c.y,d=Math.hypot(dx,dy)||1;
+    let w;
+    if(o.kind==="creature"){
+      const k=kinship(c,o)*g.kinRecog;
+      w=g.attrCreature*(1-k)+g.attrKin*k+g.attrFood*preyValue(c,o);
+    }else w=g.attrFood*foodValue(c,o);
+    const inv=1/(1+d*.02);
+    sx+=w*(dx/d)*inv;sy+=w*(dy/d)*inv;
+  }
+  if(c.mateTarget&&!c.mateTarget.dead){
+    const dx=c.mateTarget.x-c.x,dy=c.mateTarget.y-c.y,d=Math.hypot(dx,dy)||1;
+    sx+=(dx/d)*1.8;sy+=(dy/d)*1.8;
+  }
+  c.wander+=gauss()*g.randomness*2.7*dt;
+  const wm=.10+g.randomness*.30;
+  sx+=Math.cos(c.wander)*wm;sy+=Math.sin(c.wander)*wm;
+  if(c.hitWall){sx-=Math.cos(c.ang)*1.2;sy-=Math.sin(c.ang)*1.2;c.wander+=(rnd()-.5)*2;c.hitWall=false;}
+
+  let fwd=1;
+  if(Math.hypot(sx,sy)>1e-4){
+    const diff=angDiff(Math.atan2(sy,sx),c.ang);
+    c.ang+=clamp(diff,-g.turnRate*dt,g.turnRate*dt);
+    fwd=Math.cos(diff);
+    if(fwd>-.15&&fwd<.15)fwd=.15;
+  }
+  const mature=clamp(c.size/(g.sizeMax*g.matureFrac||1),.35,1);
+  const limbs=Math.round(g.limbPairs);
+  const sp=g.speed*(.55+.45*mature)*(1+.12*limbs*g.limbLen)/senility/(c.budChild?1.25:1);
+  if(!c.host){
+    c.x+=Math.cos(c.ang)*sp*fwd*dt;c.y+=Math.sin(c.ang)*sp*fwd*dt;
+    c.rad=c.size;resolveWall(c);
+    c.x=clamp(c.x,5,W-5);c.y=clamp(c.y,5,H-5);
+  }
+  updateSegs(c,dt,clamp(Math.abs(sp*fwd)/25,0,2));
+
+  let cost=g.metabolism*Math.pow(bodyBulk(c),.75)*C.basal*senility*(c.regen>0?1.6:1);
+  cost+=Math.pow(Math.abs(sp*fwd),1.6)*c.size*C.move;
+  for(const e of c.g.eyes)cost+=e.range*e.fov*C.eye;
+  cost+=(g.digPlant+g.digMeat+g.digCarrion+g.digWaste)*c.size*C.dig;
+  cost+=g.biteForce*g.biteSpeed*g.mouthSize*C.bite*c.size;
+  cost+=limbs*g.limbLen*c.size*C.limb;
+  cost+=(c.segs.length-1)*c.size*C.seg;
+  if(g.mode==="sexual")cost+=g.mateRange*c.size*.00006; // 相手を探す・目立つコスト
+  c.energy-=cost*dt;
+
+  eat(c,dt);
+  digest(c,dt);
+
+  if(c.size<g.sizeMax&&c.energy>12){
+    const ds=g.growthRate*(g.sizeMax-c.size)*dt*.45;
+    const cst=ds*c.size*C.growCost;
+    if(c.energy>cst+8){
+      c.size+=ds;c.energy-=cst;
+      const need=Math.max(1,Math.round(g.segCount));
+      while(c.segs.length<need)c.segs.push({x:c.x,y:c.y,a:c.ang});
+      while(c.segs.length>need)c.segs.pop();
+    }
+  }
+  if(c.wasteAcc>c.size*.7){
+    things.push(Thing("waste",c.x-Math.cos(c.ang)*c.size,c.y-Math.sin(c.ang)*c.size,c.wasteAcc));
+    c.wasteAcc=0;
+  }
+  c.reproT-=dt;
+  if(c.reproT<=0&&c.regen<=0&&!c.budOf&&c.size>=g.sizeMax*g.matureFrac&&
+     (c.energy>g.reproEnergy||(g.mode==="sexual"&&c.mateTarget)))reproduce(c);
+
+  const emax=25+c.size*c.size*1.3;
+  if(c.energy>emax)c.energy=emax;
+  if(c.energy<=0||c.age>Math.min(g.lifespan,MAXLIFE))die(c);
+}
+
+function eat(c,dt){
+  const g=c.g;
+  const reach=c.size*1.55+g.gape*.28;
+  const list=gridQuery(c.x,c.y,reach+8);
+  const cap=g.mouthSize*c.size*g.biteSpeed*.9*dt;
+  if(cap<=0)return;
+  const mx=c.x+Math.cos(c.ang)*c.size*.85,my=c.y+Math.sin(c.ang)*c.size*.85;
+  for(let i=0;i<list.length;i++){
+    const o=list[i];
+    if(o===c||o.dead)continue;
+    const dx=o.x-mx,dy=o.y-my;
+    if(dx*dx+dy*dy>(reach+o.rad)*(reach+o.rad))continue;
+    if(Math.abs(angDiff(Math.atan2(o.y-c.y,o.x-c.x),c.ang))>1.25)continue;
+    if(c.stMass>=g.stomachCap)return;
+    if(o.kind==="creature"){
+      const bite=clamp(g.biteForce/(1+o.size*.9),0,1)*clamp(g.gape/(o.size+1),0,1)*g.meatProc;
+      if(bite<.03)continue;
+      const m=Math.min(cap*bite,o.size*.35);
+      if(m<=0)continue;
+      o.energy-=m*2.2;o.size=Math.max(.6,o.size-m*.1);
+      c.stomach.meat+=m;c.stMass+=m;c.lastEat=simTime;
+      c.atkT=.5;o.hitT=.6;c.bites++;
+      spawnFx(o.x,o.y,2,55);
+      if(g.attach>.45&&!c.host&&o.host!==c&&rnd()<g.attach*.35){
+        c.host=o;c.attOff=angDiff(Math.atan2(c.y-o.y,c.x-o.x),o.ang);
+        c.attDist=Math.hypot(c.x-o.x,c.y-o.y);
+      }
+      return;
+    }
+    let ratio,slot,gate;
+    if(o.kind==="plant"){
+      ratio=g.plantProc*clamp(g.biteForce/(o.g.tough*9+1),0,1); // 硬い植物は噛む力が要る
+      slot="plant";gate=clamp(g.gape/(o.rad*1.1),.05,1);
+      var nutri=.4+o.g.nutri;
+    }else if(o.kind==="corpse"){ratio=g.meatProc;slot="carrion";gate=clamp(g.gape/(o.rad*1.1),.05,1);}
+    else if(o.kind==="waste"){ratio=.6;slot="waste";gate=1;}
+    else{ // 卵は殻が硬い／胞子は小さいだけ
+      ratio=g.meatProc*(o.kind==="egg"?clamp(g.biteForce/5,0,1):1);
+      slot="meat";gate=clamp(g.gape/(o.rad*1.1),.05,1);}
+    const m=Math.min(cap*ratio*gate,o.mass);
+    if(m<=.001)continue;
+    o.mass-=m;if(o.mass<=.02)o.dead=true;
+    const eff=slot==="plant"?m*(nutri/.9):m;
+    c.stomach[slot]+=eff;c.stMass+=eff;c.lastEat=simTime;
+    return;
+  }
+  if(g.attach>.55&&!c.host){
+    for(let i=0;i<list.length;i++){
+      const o=list[i];
+      if(o.kind!=="creature"||o===c||o.dead||o.host===c)continue;
+      if(o.size<c.size*.8)continue;
+      if(rnd()<g.attach*.02){
+        c.host=o;c.attOff=angDiff(Math.atan2(c.y-o.y,c.x-o.x),o.ang);
+        c.attDist=Math.hypot(c.x-o.x,c.y-o.y);
+      }
+      break;
+    }
+  }
+}
+function digest(c,dt){
+  if(c.stMass<=0)return;
+  const g=c.g;
+  const take=Math.min((1.2+g.stomachCap*.05)*C.digestRate*dt,c.stMass);
+  const f=take/c.stMass;
+  const eff={plant:g.digPlant,meat:g.digMeat,carrion:g.digCarrion,waste:g.digWaste};
+  for(const k in c.stomach){
+    const m=c.stomach[k]*f;
+    if(m<=0)continue;
+    c.stomach[k]-=m;
+    const gain=m*eff[k]*C.energyPerMass;
+    c.energy+=gain;src[k]+=gain;
+    c.wasteAcc+=m*(1-eff[k])*C.wasteFrac;
+  }
+  c.stMass=Math.max(0,c.stMass-take);
+}
+function childGenome(c){return mutate(copyGenome(c.g),1,txt=>logEvent(txt));}
+
+function reproduce(c){
+  const g=c.g;
+  c.reproT=g.reproInterval;
+  const n=Math.max(1,Math.round(g.offspringCount)),invest=g.invest;
+  const place=d=>{const a=rnd()*TAU;
+    return [clamp(c.x+Math.cos(a)*d,8,W-8),clamp(c.y+Math.sin(a)*d,8,H-8)];};
+
+  // 分裂：体をほぼ倍にしてから二等分。周期は短いが子は常に2体、親は残らない
+  if(g.mode==="fission"){
+    if(c.size<g.sizeMax*.88){c.reproT=1;return;}
+    if(creatures.length>=MAXPOP)return;
+    c.reproT=g.reproInterval*.5;
+    const e=c.energy*.5;
+    for(let i=0;i<2;i++){
+      const [x,y]=place(c.size*1.2);
+      creatures.push(newCreature(childGenome(c),x,y,rnd()*TAU,e,c.gen+1,c.size*.7));
+    }
+    c.dead=true;c.noCorpse=true;
+
+  // 分裂片：親の体を大きな破片に分ける。子は大きいが再生期間があり、その間は代謝が高く繁殖できない
+  }else if(g.mode==="fragment"){
+    const k=Math.min(n+1,8),e=c.energy/k;
+    for(let i=0;i<k&&creatures.length<MAXPOP;i++){
+      const [x,y]=place(c.size*2);
+      const ch=newCreature(childGenome(c),x,y,rnd()*TAU,e,c.gen+1,c.size/Math.sqrt(k));
+      ch.regen=10+k*1.5;creatures.push(ch);
+    }
+    c.dead=true;c.noCorpse=true;
+
+  // 出芽：一度に1体だけ。親の体組織を削って作り、育つまで親に付いたまま（親は鈍る）
+  }else if(g.mode==="budding"){
+    if(c.budChild||creatures.length>=MAXPOP){c.reproT=2;return;}
+    const bs=Math.max(.7,g.sizeMax*g.childSizeFrac*.6);
+    if(c.energy<invest+8||c.size-bs*.7<g.sizeMax*g.matureFrac*.55){c.reproT=2;return;}
+    c.energy-=invest;
+    c.size-=bs*.7; // 芽は親の体からできる
+    const ch=newCreature(childGenome(c),c.x,c.y,c.ang,invest*.8,c.gen+1,bs);
+    ch.budOf=c;ch.host=c;ch.attOff=rnd()*TAU;ch.attDist=(c.size+bs)*.95;
+    c.budChild=ch;creatures.push(ch);
+
+  // 卵：殻が硬く食べられにくい。孵化は遅いが、たっぷり蓄えた大きな子が出てくる
+  }else if(g.mode==="egg"){
+    for(let i=0;i<n;i++){
+      if(c.energy<invest*1.15+6)break;
+      c.energy-=invest*1.15; // 殻を作る分の余分な投資
+      const [x,y]=place(c.size*1.4);
+      things.push(Thing("egg",x,y,Math.max(.5,invest*.11),
+        {genome:childGenome(c),energy:invest*.95,hatch:12+invest*.35,gen:c.gen+1,
+         hsize:g.sizeMax*g.childSizeFrac*1.25}));
+    }
+
+  // 胞子：極小・極安・遠くまで散る。休眠が長く、多くは発芽に失敗する賭け
+  }else if(g.mode==="spore"){
+    for(let i=0;i<n;i++){
+      if(c.energy<invest*.3+4)break;
+      c.energy-=invest*.3;
+      const [x,y]=place(150+rnd()*550);
+      if(inWall(x,y,3))continue;
+      things.push(Thing("spore",x,y,.3,
+        {genome:childGenome(c),energy:Math.max(2,invest*.18),hatch:20+rnd()*40,
+         gen:c.gen+1,fail:rnd()<.25,hsize:Math.max(.7,g.sizeMax*.14)}));
+    }
+
+  // 有性生殖：相手が要る。その代わり両親が費用を分担するので、1体では作れない子を作れる
+  // 有性生殖：好みで選んだ相手に近づき、接触して初めて成立する
+  }else if(g.mode==="sexual"){
+    const t=c.mateTarget;
+    if(!t||t.dead||!mateReady(t)||t.sex===c.sex){c.reproT=.8;c.mateTarget=null;return;}
+    const d=Math.hypot(t.x-c.x,t.y-c.y);
+    if(d>c.size+t.size+5){c.reproT=.5;return;} // まだ届いていない：近づき続ける
+    for(let i=0;i<n;i++){
+      if(c.energy<invest*.6+6||t.energy<invest*.6+4||creatures.length>=MAXPOP)break;
+      c.energy-=invest*.6;t.energy-=invest*.6; // 費用は両親で分担
+      const cg=mutate(crossGenome(c.g,t.g),1,txt=>logEvent(txt));
+      const [x,y]=place(c.size*1.8);
+      creatures.push(newCreature(cg,x,y,rnd()*TAU,invest*1.0,Math.max(c.gen,t.gen)+1));
+    }
+    t.reproT=t.g.reproInterval;t.mateTarget=null;c.mateTarget=null;
+  }
+}
+function die(c){
+  if(c.dead)return;
+  c.dead=true;
+  if(c.hitT>0)spawnFx(c.x,c.y,10,90); // 捕食されての死
+  if(c.budChild){c.budChild.budOf=null;c.budChild.host=null;c.budChild=null;}
+  if(c.budOf){if(c.budOf.budChild===c)c.budOf.budChild=null;c.budOf=null;}
+  if(!c.noCorpse)things.push(Thing("corpse",c.x,c.y,Math.max(.6,c.size*1.4+c.energy*.05)));
+}
+
+//============================ 捕食の演出 ============================
+const fx=[];
+function spawnFx(x,y,n,spd){
+  if(fx.length>320)return;
+  for(let i=0;i<n;i++){
+    const a=rnd()*TAU,v=spd*(.3+rnd());
+    fx.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,t:.75});
+  }
+}
+function updateFx(dt){
+  for(let i=fx.length-1;i>=0;i--){
+    const f=fx[i];
+    f.x+=f.vx*dt;f.y+=f.vy*dt;f.vx*=.92;f.vy*=.92;f.t-=dt;
+    if(f.t<=0){fx[i]=fx[fx.length-1];fx.pop();}
+  }
+}
+
+//============================ ステップ ============================
+function step(){
+  tick++;simTime+=DT;
+  gridClear();
+  for(const o of things)gridAdd(o);
+  for(const c of creatures)gridAdd(c);
+  plantCount=updateThings(DT);
+  updateFx(DT);
+  readyMates.length=0;
+  for(const c of creatures)
+    if(!c.dead&&c.g.mode==="sexual"&&c.energy>c.g.reproEnergy&&mateReady(c))readyMates.push(c);
+  for(let i=0;i<creatures.length;i++){const c=creatures[i];if(!c.dead)stepCreature(c,DT);}
+  for(let i=creatures.length-1;i>=0;i--){
+    const c=creatures[i];
+    if(c.dead){if(selected===c)selected=null;creatures[i]=creatures[creatures.length-1];creatures.pop();}
+  }
+  if(simTime-lastSample>=5){lastSample=simTime;sample();}
+}
+
+//============================ 統計 ============================
+const hist=[];let lastSample=0;
+function sample(){
+  const n=creatures.length;
+  let size=0,life=0,speed=0,off=0,segs=0,limbs=0,age=0;
+  const mode={};for(const m of MODES)mode[m]=0;
+  for(const c of creatures){
+    size+=c.size;life+=Math.min(c.g.lifespan,MAXLIFE);speed+=c.g.speed;
+    off+=c.g.offspringCount;segs+=c.segs.length;limbs+=Math.round(c.g.limbPairs);
+    age+=c.age;mode[c.g.mode]++;
+  }
+  let pm=0,pt=0,pn=0,pc=0;
+  for(const o of things)if(o.kind==="plant"){pm+=o.g.maxMass;pt+=o.g.tough;pn+=o.g.nutri;pc++;}
+  const tot=src.plant+src.meat+src.carrion+src.waste+src.drain||1;
+  hist.push({t:simTime,pop:n,plants:plantCount,
+    size:n?size/n:0,life:n?life/n:0,speed:n?speed/n:0,off:n?off/n:0,
+    segs:n?segs/n:0,limbs:n?limbs/n:0,age:n?age/n:0,
+    pmass:pc?pm/pc:0,ptough:pc?pt/pc:0,pnutri:pc?pn/pc:0,
+    diet:{plant:src.plant/tot,meat:(src.meat+src.drain)/tot,carrion:src.carrion/tot,waste:src.waste/tot},
+    mode:Object.assign({},mode)});
+  if(hist.length>500)hist.shift();
+}
+
+//============================ 初期化 ============================
+function reset(){
+  applyCFG();
+  creatures=[];things=[];hist.length=0;simTime=0;tick=0;maxGen=0;lastSample=0;
+  logs.length=0;document.getElementById("logb").innerHTML="";fx.length=0;
+  for(const k in src)src[k]=0;
+  makeWalls();plantCount=0;
+  const np=Math.min(CFG.initPlants,MAXPLANT);
+  for(let i=0;i<np;i++){
+    plantCount=0;
+    spawnPlant(60+rnd()*(W-120),60+rnd()*(H-120),mutatePlant(basePlantGenome(),CFG.initSpread));
+  }
+  for(const o of things)if(o.kind==="plant")o.mass=o.g.maxMass*(.3+rnd()*.5);
+  for(let i=0;i<Math.min(CFG.initPop,MAXPOP);i++){
+    const g=mutate(baseGenome(),CFG.initSpread);
+    let x,y,t=0;
+    do{x=100+rnd()*(W-200);y=100+rnd()*(H-200);t++;}while(inWall(x,y,10)&&t<40);
+    creatures.push(newCreature(g,x,y,rnd()*TAU,g.reproEnergy*1.1,0));
+  }
+  cam.x=W/2;cam.y=H/2;cam.z=Math.min(.9,1400/W);selected=null;
+  document.getElementById("info").style.display="none";
+  mut.value=Math.round(CFG.mutRate*20);mutv.textContent="×"+CFG.mutRate.toFixed(1);
+  sample();
+}
+
+//============================ 描画 ============================
+const cv=document.getElementById("world"),ctx=cv.getContext("2d");
+const cam={x:W/2,y:H/2,z:.5};
+let selected=null,follow=false,showFov=true,lineageColor=false;
+let VW=1,VH=1,DPR=1;
+function resize(){
+  VW=innerWidth;VH=innerHeight;
+  cv.style.width=VW+"px";cv.style.height=VH+"px";
+  cv.width=Math.round(VW*devicePixelRatio);
+  cv.height=Math.round(VH*devicePixelRatio);
+  DPR=cv.width/VW; // 実際の拡大率（丸め誤差込み）
+}
+addEventListener("resize",resize);resize();
+
+function dietColor(g){
+  const p=g.digPlant*g.plantProc,m=g.digMeat*g.meatProc,
+        ca=g.digCarrion*g.meatProc,wa=g.digWaste,s=p+m+ca+wa||1;
+  return [(90*p+230*m+205*ca+150*wa)/s|0,(205*p+70*m+140*ca+110*wa)/s|0,(95*p+70*m+70*ca+210*wa)/s|0];
+}
+function hsl2rgb(h,s,l){
+  const a=s*Math.min(l,1-l);
+  const f=n=>{const k=(n+h*12)%12;return l-a*Math.max(-1,Math.min(k-3,9-k,1));};
+  return [f(0)*255|0,f(8)*255|0,f(4)*255|0];
+}
+function bodyColor(c){
+  if(lineageColor)return hsl2rgb(c.g.marker[0],.55,.56);
+  const d=dietColor(c.g),h=c.g.marker[0];
+  const t=hsl2rgb(h,.5,.55);
+  return [(d[0]*.72+t[0]*.28)|0,(d[1]*.72+t[1]*.28)|0,(d[2]*.72+t[2]*.28)|0];
+}
+function plantColor(g){
+  const rgb=hsl2rgb(.20+g.hue*.22,.45+g.tough*.3,.30+g.nutri*.22);
+  return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+}
+
+function drawCreature(c,detail){
+  const g=c.g,col=bodyColor(c);
+  const base=`rgb(${col[0]},${col[1]},${col[2]})`;
+  const dark=`rgb(${col[0]*.55|0},${col[1]*.55|0},${col[2]*.55|0})`;
+  if(!detail){
+    ctx.fillStyle=c.hitT>0?"#ff4a3d":c.atkT>0?"#ffb03a":base;
+    ctx.beginPath();ctx.arc(c.x,c.y,Math.max(1.2,c.size)*(c.hitT>0?1.6:1),0,TAU);ctx.fill();return;
+  }
+  const pat=Math.round(g.pattern);
+  ctx.lineWidth=Math.max(.35,c.size*.10);
+  ctx.strokeStyle=dark;
+  // --- 肢（2関節）---
+  const limbs=Math.round(g.limbPairs);
+  if(limbs>0){
+    ctx.strokeStyle=dark;
+    ctx.lineWidth=Math.max(.35,c.size*.16);
+    ctx.lineCap="round";
+    for(let i=0;i<limbs;i++){
+      let host;
+      if(i===0)host={x:c.x,y:c.y,a:c.ang,r:c.size};
+      else{
+        const si=Math.min(i-1,c.segs.length-1),s=c.segs[si];
+        host=s?{x:s.x,y:s.y,a:s.a,r:segRadius(c,si)}:{x:c.x,y:c.y,a:c.ang,r:c.size};
+      }
+      const L=Math.max(1,c.size*g.limbLen);
+      for(const sd of [1,-1]){
+        const sw=Math.sin(c.limbPh+i*1.1+(sd>0?0:Math.PI))*.4;
+        const ox=host.x+Math.cos(host.a+sd*Math.PI/2)*host.r*.85;
+        const oy=host.y+Math.sin(host.a+sd*Math.PI/2)*host.r*.85;
+        const d1=host.a+sd*(Math.PI/2)*(.35+g.limbAngle*.42)+sd*sw*.5;
+        const jx=ox+Math.cos(d1)*L*.55,jy=oy+Math.sin(d1)*L*.55;
+        const d2=d1+sd*g.limbJoint+sw;
+        const ex=jx+Math.cos(d2)*L*.55,ey=jy+Math.sin(d2)*L*.55;
+        ctx.beginPath();ctx.moveTo(ox,oy);ctx.lineTo(jx,jy);ctx.lineTo(ex,ey);ctx.stroke();
+      }
+    }
+  }
+  // --- 体節（後ろから）---
+  for(let i=c.segs.length-1;i>=0;i--){
+    const s=c.segs[i],r=segRadius(c,i);
+    ctx.save();ctx.translate(s.x,s.y);ctx.rotate(s.a);
+    ctx.fillStyle=base;
+    ctx.beginPath();ctx.ellipse(0,0,r*Math.sqrt(g.aspect),r/Math.sqrt(g.aspect),0,0,TAU);ctx.fill();
+    ctx.lineWidth=Math.max(.25,r*.14);ctx.strokeStyle=dark;ctx.stroke();
+    ctx.restore();
+  }
+  // --- 頭部 ---
+  ctx.save();ctx.translate(c.x,c.y);ctx.rotate(c.ang);
+  const rx=c.size*Math.sqrt(g.aspect),ry=c.size/Math.sqrt(g.aspect);
+  ctx.fillStyle=base;
+  ctx.beginPath();ctx.ellipse(0,0,rx,ry,0,0,TAU);ctx.fill();
+  ctx.lineWidth=Math.max(.3,c.size*.13);ctx.strokeStyle=dark;ctx.stroke();
+  // 模様
+  if(pat===1){
+    ctx.strokeStyle=dark;ctx.lineWidth=Math.max(.25,c.size*.16);
+    for(let i=-1;i<=1;i++){
+      ctx.beginPath();ctx.moveTo(rx*i*.4,-ry*.85);ctx.lineTo(rx*i*.4,ry*.85);ctx.stroke();
+    }
+  }else if(pat===2){
+    ctx.fillStyle=dark;
+    for(let i=0;i<3;i++){
+      const a=i*2.1;
+      ctx.beginPath();ctx.arc(Math.cos(a)*rx*.4,Math.sin(a)*ry*.4,Math.max(.3,c.size*.19),0,TAU);ctx.fill();
+    }
+  }
+  // 口（噛みついている間は赤く光る）
+  const biting=c.atkT>0;
+  ctx.fillStyle=biting?"#ff5540":"rgba(12,17,21,.8)";
+  const mw=Math.max(.5,Math.min(g.gape,c.size*1.5))*.42*(biting?1.5:1);
+  ctx.beginPath();ctx.ellipse(rx*.74,0,Math.max(.5,g.mouthSize*c.size*.5)*(biting?1.5:1),mw,0,0,TAU);ctx.fill();
+  if(biting){
+    ctx.strokeStyle="rgba(255,110,70,"+clamp(c.atkT*1.6,0,.9)+")";
+    ctx.lineWidth=Math.max(.4,c.size*.22);
+    ctx.beginPath();ctx.arc(rx*.9,0,c.size*.9,-1.0,1.0);ctx.stroke();
+  }
+  // 性別マーク（有性生殖の個体のみ）
+  if(g.mode==="sexual"){
+    ctx.fillStyle=c.sex?"#e07ab4":"#5fc8e0";
+    ctx.beginPath();ctx.arc(-rx*.45,0,Math.max(.4,c.size*.22),0,TAU);ctx.fill();
+  }
+  // 目
+  for(const e of g.eyes){
+    const ex=Math.cos(e.ang)*rx*.62,ey=Math.sin(e.ang)*ry*.62,er=Math.max(.45,c.size*.19);
+    ctx.fillStyle="#f4f8fa";ctx.beginPath();ctx.arc(ex,ey,er,0,TAU);ctx.fill();
+    ctx.fillStyle="#11181e";
+    ctx.beginPath();ctx.arc(ex+Math.cos(e.dir)*er*.4,ey+Math.sin(e.dir)*er*.4,er*.5,0,TAU);ctx.fill();
+  }
+  ctx.restore();
+  if(c.hitT>0){
+    const a1=clamp(c.hitT*1.5,0,.95);
+    ctx.strokeStyle="rgba(255,70,55,"+a1+")";
+    ctx.lineWidth=Math.max(.6,c.size*.3);
+    ctx.beginPath();ctx.arc(c.x,c.y,c.size+3+(0.6-c.hitT)*10,0,TAU);ctx.stroke();
+    ctx.fillStyle="rgba(255,70,55,"+(a1*.35)+")";
+    ctx.beginPath();ctx.arc(c.x,c.y,c.size*1.15,0,TAU);ctx.fill();
+  }
+  if(c.host){
+    ctx.strokeStyle="rgba(217,123,168,.75)";ctx.lineWidth=Math.max(.3,.8/cam.z);
+    ctx.beginPath();ctx.moveTo(c.x,c.y);ctx.lineTo(c.host.x,c.host.y);ctx.stroke();
+  }
+  if(c.mateTarget&&!c.mateTarget.dead){
+    ctx.strokeStyle="rgba(95,200,224,.5)";ctx.lineWidth=Math.max(.3,.7/cam.z);
+    ctx.setLineDash([3/cam.z,3/cam.z]);
+    ctx.beginPath();ctx.moveTo(c.x,c.y);ctx.lineTo(c.mateTarget.x,c.mateTarget.y);ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function draw(){
+  const w=cv.width,h=cv.height;
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle="#0d1318";ctx.fillRect(0,0,w,h);
+  if(follow&&selected)  {cam.x=selected.x;cam.y=selected.y;}
+  const z=cam.z*DPR;
+  ctx.setTransform(z,0,0,z,w/2-cam.x*z,h/2-cam.y*z);
+  const vw=w/z,vh=h/z,vx=cam.x-vw/2,vy=cam.y-vh/2;
+  ctx.fillStyle="#141d24";ctx.fillRect(0,0,W,H);
+  ctx.fillStyle="#26333c";ctx.strokeStyle="#33444f";ctx.lineWidth=1/cam.z;
+  for(const s of walls){ctx.fillRect(s.x,s.y,s.w,s.h);ctx.strokeRect(s.x,s.y,s.w,s.h);}
+  const detail=cam.z>.34;
+  for(const o of things){
+    if(o.x<vx-20||o.y<vy-20||o.x>vx+vw+20||o.y>vy+vh+20)continue;
+    if(o.kind==="plant"){
+      ctx.fillStyle=plantColor(o.g);
+      const f=Math.round(o.g.form);
+      if(!detail||f===0){ctx.beginPath();ctx.arc(o.x,o.y,o.rad,0,TAU);ctx.fill();}
+      else if(f===1){ // 葉状
+        ctx.beginPath();
+        for(let i=0;i<4;i++){
+          const a=i*Math.PI/2+o.mass*.1;
+          ctx.moveTo(o.x,o.y);
+          ctx.ellipse(o.x+Math.cos(a)*o.rad*.6,o.y+Math.sin(a)*o.rad*.6,o.rad*.62,o.rad*.34,a,0,TAU);
+        }
+        ctx.fill();
+      }else{ // 棘状
+        ctx.beginPath();
+        for(let i=0;i<7;i++){
+          const a=i*TAU/7,r2=i%2?o.rad*.45:o.rad*1.25;
+          const x=o.x+Math.cos(a)*r2,y=o.y+Math.sin(a)*r2;
+          i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+        }
+        ctx.closePath();ctx.fill();
+      }
+    }else{
+      ctx.fillStyle=o.kind==="corpse"?"#8a6a58":o.kind==="waste"?"#6d5f7e":"#d8c27a";
+      ctx.beginPath();ctx.arc(o.x,o.y,o.rad,0,TAU);ctx.fill();
+    }
+  }
+  for(const c of creatures){
+    if(c.x<vx-40||c.y<vy-40||c.x>vx+vw+40||c.y>vy+vh+40)continue;
+    drawCreature(c,detail);
+  }
+  for(const f of fx){
+    if(f.x<vx-10||f.y<vy-10||f.x>vx+vw+10||f.y>vy+vh+10)continue;
+    ctx.fillStyle="rgba(255,80,60,"+clamp(f.t*1.3,0,.9)+")";
+    ctx.beginPath();ctx.arc(f.x,f.y,Math.max(.6,f.t*3.2),0,TAU);ctx.fill();
+  }
+  if(selected&&!selected.dead){
+    const c=selected;
+    ctx.strokeStyle="#e0a04a";ctx.lineWidth=1.6/cam.z;
+    ctx.beginPath();ctx.arc(c.x,c.y,c.size+6,0,TAU);ctx.stroke();
+    if(showFov){
+      ctx.fillStyle="rgba(224,160,74,.09)";ctx.strokeStyle="rgba(224,160,74,.3)";
+      ctx.lineWidth=.8/cam.z;
+      for(const e of c.g.eyes){
+        const d=c.ang+e.dir;
+        ctx.beginPath();ctx.moveTo(c.x,c.y);
+        ctx.arc(c.x,c.y,e.range,d-e.fov/2,d+e.fov/2);
+        ctx.closePath();ctx.fill();ctx.stroke();
+      }
+    }
+  }
+}
+
+//============================ UI ============================
+//============================ 設定画面 ============================
+const setupEl=document.getElementById("setup"),setupBody=document.getElementById("setupBody");
+const fieldEls={};
+function buildSetup(){
+  let html="";
+  for(const sec of CFGSPEC){
+    html+=`<div class="sec">${sec.name}</div><div class="grid">`;
+    for(const [key,label,min,max,step,def,type] of sec.items){
+      if(type==="select"){
+        html+=`<div class="f"><b>${label}</b>
+          <select data-k="${key}">${MODES.map(m=>`<option value="${m}">${MODEJP[m]}</option>`).join("")}</select>
+          <span class="v"></span></div>`;
+      }else{
+        html+=`<div class="f"><b>${label}</b>
+          <input type="range" data-k="${key}" min="${min}" max="${max}" step="${step}">
+          <span class="v" data-v="${key}"></span></div>`;
+      }
+    }
+    html+="</div>";
+  }
+  setupBody.innerHTML=html;
+  setupBody.querySelectorAll("[data-k]").forEach(el=>{
+    const k=el.dataset.k;fieldEls[k]=el;
+    el.addEventListener("input",()=>{
+      CFG[k]=el.tagName==="SELECT"?el.value:parseFloat(el.value);
+      showVal(k);
+    });
+  });
+  syncSetup();
+}
+function fmtVal(v){
+  if(typeof v==="string")return "";
+  if(Math.abs(v)>=100||Number.isInteger(v))return String(v);
+  if(Math.abs(v)<.001)return v.toExponential(1);
+  return v.toFixed(Math.abs(v)<.1?3:2);
+}
+function showVal(k){
+  const s=setupBody.querySelector(`[data-v="${k}"]`);
+  if(s)s.textContent=fmtVal(CFG[k]);
+}
+function syncSetup(){
+  for(const k in fieldEls){
+    fieldEls[k].value=CFG[k];
+    showVal(k);
+  }
+}
+buildSetup();
+document.getElementById("setupDefault").onclick=()=>{
+  for(const sec of CFGSPEC)for(const it of sec.items)CFG[it[0]]=it[5];
+  syncSetup();
+};
+document.getElementById("setupStart").onclick=()=>{
+  setupEl.classList.remove("show");reset();
+  if(speed===0){speed=1;[...sp.children].forEach((x,i)=>x.classList.toggle("on",i===1));}
+};
+document.getElementById("setupCancel").onclick=()=>setupEl.classList.remove("show");
+document.getElementById("btnSetup").onclick=()=>{syncSetup();setupEl.classList.add("show");};
+
+const SPEEDS=[["一時停止",0],["×1",1],["×2",2],["×5",5],["×10",10],["超倍速",SUPER]];
+let speed=0;
+const sp=document.getElementById("speeds");
+SPEEDS.forEach(([lab,v])=>{
+  const b=document.createElement("button");b.textContent=lab;
+  b.onclick=()=>{speed=v;[...sp.children].forEach(x=>x.classList.remove("on"));b.classList.add("on");};
+  if(v===speed)b.classList.add("on");
+  sp.appendChild(b);
+});
+const mut=document.getElementById("mut"),mutv=document.getElementById("mutv");
+mut.oninput=()=>{mutRate=mut.value/20;CFG.mutRate=mutRate;
+  mutv.textContent="×"+mutRate.toFixed(1);if(fieldEls.mutRate){fieldEls.mutRate.value=mutRate;showVal("mutRate");}};
+document.getElementById("btnFollow").onclick=e=>{follow=!follow;e.target.classList.toggle("on",follow);};
+document.getElementById("btnFov").onclick=e=>{showFov=!showFov;e.target.classList.toggle("on",showFov);};
+document.getElementById("btnFov").classList.add("on");
+document.getElementById("btnColor").onclick=e=>{lineageColor=!lineageColor;e.target.classList.toggle("on",lineageColor);};
+document.getElementById("btnReset").onclick=()=>{if(confirm("世界を初期化しますか？"))reset();};
+const statsEl=document.getElementById("stats");
+document.getElementById("btnStats").onclick=e=>{
+  const open=statsEl.style.display!=="block";
+  statsEl.style.display=open?"block":"none";e.target.classList.toggle("on",open);
+  if(open)drawGraphs();
+};
+document.getElementById("closeStats").onclick=()=>{
+  statsEl.style.display="none";document.getElementById("btnStats").classList.remove("on");};
+
+let drag=false,dx0=0,dy0=0,sx0=0,sy0=0;
+cv.addEventListener("pointerdown",e=>{
+  drag=true;dx0=sx0=e.clientX;dy0=sy0=e.clientY;cv.setPointerCapture(e.pointerId);});
+cv.addEventListener("pointermove",e=>{
+  if(!drag)return;
+  const dx=e.clientX-dx0,dy=e.clientY-dy0;
+  cam.x-=dx/cam.z;cam.y-=dy/cam.z;dx0=e.clientX;dy0=e.clientY;
+  if(Math.hypot(e.clientX-sx0,e.clientY-sy0)>10){
+    follow=false;document.getElementById("btnFollow").classList.remove("on");
+  }
+});
+cv.addEventListener("pointercancel",()=>{drag=false;});
+cv.addEventListener("pointerup",e=>{
+  drag=false;
+  if(Math.hypot(e.clientX-sx0,e.clientY-sy0)<=10)pick(e.clientX,e.clientY);});
+cv.addEventListener("wheel",e=>{e.preventDefault();cam.z=clamp(cam.z*(e.deltaY<0?1.15:.87),.12,5);},{passive:false});
+function pick(px,py){
+  const wx=cam.x+(px-VW/2)/cam.z,wy=cam.y+(py-VH/2)/cam.z;
+  const tol=12/cam.z; // 画面上12px相当の余裕
+  let best=null,bs=1e9;
+  for(const c of creatures){
+    if(c.dead)continue;
+    // 頭部と全体節のうち、表面までが最も近いものを距離とする
+    let d=Math.hypot(c.x-wx,c.y-wy)-c.size;
+    for(let i=0;i<c.segs.length;i++){
+      const s=c.segs[i],d2=Math.hypot(s.x-wx,s.y-wy)-segRadius(c,i);
+      if(d2<d)d=d2;
+    }
+    if(d<tol&&d<bs){bs=d;best=c;}
+  }
+  selected=best;
+  document.getElementById("info").style.display=best?"block":"none";
+}
+
+const infoEl=document.getElementById("info");
+const f=(v,d)=>(+v).toFixed(d===undefined?2:d);
+function drawInfo(){
+  if(!selected||selected.dead){infoEl.style.display="none";return;}
+  const c=selected,g=c.g;
+  const eyes=g.eyes.map((e,i)=>`<tr><td>目${i+1} 位置/向き</td><td>${f(e.ang,2)} / ${f(e.dir,2)}</td></tr>
+    <tr><td>　視野角/距離</td><td>${f(e.fov*180/Math.PI,0)}° / ${f(e.range,0)}</td></tr>`).join("");
+  const col=bodyColor(c);
+  infoEl.innerHTML=`<h3>個体 #${c.id} <span style="color:rgb(${col[0]},${col[1]},${col[2]})">■</span></h3>
+  <table>
+    <tr><td>年齢 / 寿命</td><td>${f(c.age,0)} / ${f(Math.min(g.lifespan,MAXLIFE),0)}</td></tr>
+    <tr><td>世代</td><td>${c.gen}</td></tr>
+    <tr><td>エネルギー</td><td>${f(c.energy,1)}</td></tr>
+    <tr><td>サイズ / 最大</td><td>${f(c.size,1)} / ${f(g.sizeMax,1)}</td></tr>
+    <tr><td>成長速度 / 成熟</td><td>${f(g.growthRate)} / ${f(g.sizeMax*g.matureFrac,1)}</td></tr>
+    <tr><td>基礎代謝</td><td>${f(g.metabolism)}</td></tr>
+  </table>
+  <div class="sec">身体・関節</div><table>
+    <tr><td>体節数</td><td>${c.segs.length}</td></tr>
+    <tr><td>体節の細り/間隔</td><td>${f(g.segTaper)} / ${f(g.segGap)}</td></tr>
+    <tr><td>関節可動 / うねり</td><td>${f(g.flex)} / ${f(g.undRate)}</td></tr>
+    <tr><td>肢の対数</td><td>${Math.round(g.limbPairs)}</td></tr>
+    <tr><td>肢 長さ/角度/関節</td><td>${f(g.limbLen)} / ${f(g.limbAngle)} / ${f(g.limbJoint)}</td></tr>
+    <tr><td>縦横比 / 模様</td><td>${f(g.aspect)} / ${["無地","縞","斑点"][Math.round(g.pattern)]}</td></tr>
+    <tr><td>速度 / 旋回</td><td>${f(g.speed,1)} / ${f(g.turnRate)}</td></tr>
+  </table>
+  <div class="sec">目（${g.eyes.length}）</div><table>${eyes||"<tr><td>なし</td><td>—</td></tr>"}</table>
+  <div class="sec">口</div><table>
+    <tr><td>大きさ / 開口</td><td>${f(g.mouthSize)} / ${f(g.gape,1)}</td></tr>
+    <tr><td>噛む力 / 速度</td><td>${f(g.biteForce,1)} / ${f(g.biteSpeed)}</td></tr>
+    <tr><td>植物 / 肉処理</td><td>${f(g.plantProc)} / ${f(g.meatProc)}</td></tr>
+  </table>
+  <div class="sec">消化</div><table>
+    <tr><td>植物 / 肉</td><td>${f(g.digPlant)} / ${f(g.digMeat)}</td></tr>
+    <tr><td>死肉 / 排泄物</td><td>${f(g.digCarrion)} / ${f(g.digWaste)}</td></tr>
+    <tr><td>胃容量 / 現在</td><td>${f(g.stomachCap,0)} / ${f(c.stMass,1)}</td></tr>
+    <tr><td>生体への噛みつき</td><td>${c.bites}回</td></tr>
+  </table>
+  <div class="sec">行動・血縁・付着</div><table>
+    <tr><td>餌への接近</td><td>${f(g.attrFood)}</td></tr>
+    <tr><td>他個体 / 近縁</td><td>${f(g.attrCreature)} / ${f(g.attrKin)}</td></tr>
+    <tr><td>ランダム性</td><td>${f(g.randomness)}</td></tr>
+    <tr><td>血縁認識</td><td>${f(g.kinRecog)}</td></tr>
+    <tr><td>付着 / 吸収</td><td>${f(g.attach)} / ${f(g.drain)}</td></tr>
+    <tr><td>付着中</td><td>${c.host?"#"+c.host.id:"—"}</td></tr>
+    <tr><td>状態</td><td>${c.budOf?"芽（#"+c.budOf.id+"に付着）":c.budChild?"芽を保育中":c.regen>0?"再生中 "+f(c.regen,0):"—"}</td></tr>
+  </table>
+  <div class="sec">繁殖</div><table>
+    <tr><td>方法</td><td style="color:${MODECOL[g.mode]}">${MODEJP[g.mode]}</td></tr>
+    <tr><td>開始E / 間隔</td><td>${f(g.reproEnergy,0)} / ${f(g.reproInterval,1)}</td></tr>
+    <tr><td>子の数 / 投資</td><td>${f(g.offspringCount,1)} / ${f(g.invest,1)}</td></tr>
+    <tr><td>子の初期サイズ</td><td>${f(g.sizeMax*g.childSizeFrac,1)}</td></tr>
+  </table>
+  ${g.mode!=="sexual"?"":`<div class="sec">配偶者の好み</div><table>
+    <tr><td>性別</td><td style="color:${c.sex?"#e07ab4":"#5fc8e0"}">${c.sex?"♀":"♂"}</td></tr>
+    <tr><td>選り好みの強さ</td><td>${f(g.choosiness)}</td></tr>
+    <tr><td>探索範囲</td><td>${f(g.mateRange,0)}</td></tr>
+    <tr><td>大きさの好み</td><td>${f(g.prefSize)}</td></tr>
+    <tr><td>素早さの好み</td><td>${f(g.prefSpeed)}</td></tr>
+    <tr><td>装飾の好み</td><td>${f(g.prefOrn)}</td></tr>
+    <tr><td>血縁の好み</td><td>${f(g.prefKin)}</td></tr>
+    <tr><td>求愛中の相手</td><td>${c.mateTarget&&!c.mateTarget.dead?"#"+c.mateTarget.id:"—"}</td></tr>
+  </table>`}`;
+}
+
+//============================ グラフ ============================
+const gc=document.getElementById("gc"),gx=gc.getContext("2d");
+function drawGraphs(){
+  const w=gc.clientWidth||700,rows=9,hh=86,pad=26;
+  gc.width=w*devicePixelRatio;gc.height=(rows*hh+pad)*devicePixelRatio;
+  gc.style.height=(rows*hh+pad)+"px";
+  gx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  gx.clearRect(0,0,w,rows*hh+pad);
+  if(hist.length<2){gx.fillStyle="#7c8d98";gx.font="12px ui-monospace";gx.fillText("データ収集中…",10,20);return;}
+  const line=(row,title,series)=>{
+    const y0=row*hh+18,gh=hh-32;
+    let mx=0;for(const s of hist)for(const se of series)mx=Math.max(mx,se.fn(s));
+    mx=mx||1;
+    gx.strokeStyle="#2b3a45";gx.lineWidth=1;
+    gx.beginPath();gx.moveTo(46,y0);gx.lineTo(46,y0+gh);gx.lineTo(w-8,y0+gh);gx.stroke();
+    gx.fillStyle="#7c8d98";gx.font="10px ui-monospace";
+    gx.fillText(mx.toFixed(mx<10?1:0),4,y0+8);gx.fillText("0",4,y0+gh);
+    gx.fillStyle="#d3dde2";gx.font="11px ui-monospace";gx.fillText(title,46,y0-4);
+    let lx=w-8;
+    for(const se of series){
+      gx.strokeStyle=se.col;gx.lineWidth=1.4;gx.beginPath();
+      hist.forEach((s,i)=>{
+        const x=46+(w-56)*i/(hist.length-1),y=y0+gh-gh*se.fn(s)/mx;
+        i?gx.lineTo(x,y):gx.moveTo(x,y);
+      });
+      gx.stroke();
+      gx.font="10px ui-monospace";
+      const tw=gx.measureText(se.name).width;
+      lx-=tw+4;gx.fillStyle=se.col;gx.fillText(se.name,lx,y0-4);lx-=6;
+    }
+  };
+  const area=(row,title,keys,cols,fn)=>{
+    const y0=row*hh+18,gh=hh-34;
+    gx.fillStyle="#d3dde2";gx.font="11px ui-monospace";gx.fillText(title,46,y0-4);
+    for(let i=0;i<hist.length-1;i++){
+      const x=46+(w-56)*i/(hist.length-1),x2=46+(w-56)*(i+1)/(hist.length-1);
+      let a1=0,a2=0;
+      keys.forEach((k,j)=>{
+        const v=fn(hist[i],k),v2=fn(hist[i+1],k);
+        gx.fillStyle=cols[j];gx.beginPath();
+        gx.moveTo(x,y0+gh-gh*a1);gx.lineTo(x2,y0+gh-gh*a2);
+        gx.lineTo(x2,y0+gh-gh*(a2+v2));gx.lineTo(x,y0+gh-gh*(a1+v));
+        gx.closePath();gx.fill();a1+=v;a2+=v2;
+      });
+    }
+    let lx=46;gx.font="10px ui-monospace";
+    keys.forEach((k,j)=>{
+      gx.fillStyle=cols[j];gx.fillRect(lx,y0+gh+5,8,8);
+      gx.fillStyle="#7c8d98";const t=MODEJP[k]||({plant:"植物",meat:"肉",carrion:"死肉",waste:"排泄物"})[k]||k;
+      gx.fillText(t,lx+11,y0+gh+13);lx+=14+gx.measureText(t).width+8;
+    });
+  };
+  line(0,"総個体数 / 植物数",[{name:"個体",col:"#e0a04a",fn:s=>s.pop},{name:"植物",col:"#4e9a5c",fn:s=>s.plants}]);
+  line(1,"平均身体サイズ",[{name:"サイズ",col:"#63b9c1",fn:s=>s.size}]);
+  line(2,"平均寿命(遺伝) / 平均年齢",[{name:"寿命",col:"#d97ba8",fn:s=>s.life},{name:"年齢",col:"#e0a04a",fn:s=>s.age}]);
+  line(3,"平均移動速度",[{name:"速度",col:"#8bcf7a",fn:s=>s.speed}]);
+  line(4,"平均子数",[{name:"子数",col:"#c9a6e0",fn:s=>s.off}]);
+  line(5,"平均体節数 / 平均肢対数",[{name:"体節",col:"#63b9c1",fn:s=>s.segs},{name:"肢",col:"#d96b5a",fn:s=>s.limbs}]);
+  line(6,"植物の平均：最大質量 / 硬さ / 栄養",[
+    {name:"質量",col:"#4e9a5c",fn:s=>s.pmass},
+    {name:"硬さ",col:"#b58a55",fn:s=>s.ptough*10},
+    {name:"栄養",col:"#8bcf7a",fn:s=>s.pnutri*10}]);
+  area(7,"食物由来エネルギー割合",["plant","meat","carrion","waste"],
+    ["#4e9a5c","#c9564a","#b58a55","#7a6b9e"],(s,k)=>s.diet[k]);
+  area(8,"繁殖方法の割合",MODES,MODES.map(m=>MODECOL[m]),
+    (s,k)=>{let t=0;for(const m of MODES)t+=s.mode[m];return s.mode[k]/(t||1);});
+}
+
+//============================ メインループ ============================
+let last=performance.now(),acc=0,lastDraw=0,frames=0,fpsT=0;
+function loop(now){
+  requestAnimationFrame(loop);
+  const rdt=Math.min(.06,(now-last)/1000);last=now;
+  if(speed===SUPER){
+    const t0=performance.now();let n=0;
+    while(performance.now()-t0<22&&n<3000){step();n++;}
+  }else if(speed>0){
+    acc+=rdt*speed;let n=0;
+    while(acc>=DT&&n<400){step();acc-=DT;n++;}
+    if(acc>DT*20)acc=0;
+  }
+  const interval=speed===SUPER?220:33;
+  if(now-lastDraw>=interval){
+    lastDraw=now;draw();drawInfo();
+    if(statsEl.style.display==="block")drawGraphs();
+    const t=simTime|0;
+    document.getElementById("clock").textContent=
+      String((t/3600|0)).padStart(2,"0")+":"+String((t/60|0)%60).padStart(2,"0")+":"+String(t%60).padStart(2,"0");
+    document.getElementById("pop").textContent=creatures.length;
+    document.getElementById("plc").textContent=plantCount;
+    document.getElementById("gen").textContent=maxGen;
+  }
+  frames++;
+  if(now-fpsT>1000){
+    document.getElementById("fps").textContent=frames+" fps ／ 倍率 "+(speed===SUPER?"超":"×"+speed);
+    frames=0;fpsT=now;
+  }
+}
+reset();
+requestAnimationFrame(loop);
+</script>

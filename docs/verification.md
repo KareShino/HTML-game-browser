@@ -3,7 +3,7 @@
 ## 開発環境で確認済みの項目（Linux）
 
 - `node --test tools/build.test.mjs`（ID変換・Zip Slip・シンボリックリンク・サイズ偽装・shim注入）
-- `node tools/build.mjs` で3形式のサンプルが `dist/games/<ID>/index.html` にそろい、`dist/games.json` が生成される
+- `node tools/build.mjs` で `games/` の全ゲームが `dist/games/<ID>/index.html` にそろい、`dist/games.json` が生成される（フォルダ・ZIP形式はテスト `tools/build.test.mjs` で確認）
 - `cd offline && go vet ./... && go test ./...`
 - Goサーバーを実際に起動し、`curl` で以下を確認
   - `/`、`/games.json`、`/games/<ID>/` が200、MIMEタイプが正しい
@@ -42,7 +42,7 @@
 ### Web版
 
 1. `main` へのpush後、Actionsの Deploy to GitHub Pages が成功する
-2. `https://kareshino.github.io/html-game-browser/` で一覧が表示され、3形式のサンプルがプレイできる
+2. `https://kareshino.github.io/html-game-browser/` で一覧が表示され、全ゲームがプレイできる
 3. ゲームのHTTPS環境での動作（音声・全画面・localStorage）
 
 ### 展示前の通し確認

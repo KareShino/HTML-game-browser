@@ -1,0 +1,1270 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Monster Dash</title>
+<style>
+:root{--bg:#22202b;--fg:#f4efd8}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+#wrap{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:0 16px;box-sizing:border-box}
+canvas{outline:2px solid #3a3746;image-rendering:pixelated;image-rendering:crisp-edges;display:block;max-width:100%}
+#help{font-size:12px;opacity:.65;text-align:center;line-height:1.6}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="320" height="180"></canvas>
+  <div id="help">Space / ↑ / タップ：ジャンプ（長押しで高く）　空中でもう一度：二段ジャンプ＋射撃<br>P：一時停止　M：ミュート</div>
+</div>
+<script>
+(() => {
+'use strict';
+// ===== 基本設定 =====
+const W = 320, H = 180, GROUND = 150;
+const PH = 12;                 // プレイヤー身長（ちび）
+const TOP_LIMIT = 6;           // プレイヤー頭の上限Y（画面上端の少し下）
+const ENEMY_TOP = 54;          // 敵の上限Y（画面下から70%）
+const BASE_SPEED = 130;        // px/s
+const PHASE_LEN = 3600;        // 基準距離（第1フェーズで走る距離）
+const PHASE_T = PHASE_LEN / 130; // フェーズは時間制：どのフェーズも第1フェーズと同じ約27.7秒
+const SWAP_T = 4.0;             // セットの終わりの背景入れ替え演出の長さ（秒）
+const JUMP = 300, JUMP2 = 300, BOUNCE = 215;  // 通常と二段は同じ上昇量（各約64px）
+const BONUS_STOMP = 200, BONUS_SHOT = 300;
+const G_HOLD = 700, G_CUT = 1900, G_FALL = 1300, MAX_FALL = 420;
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d', { alpha: false, willReadFrequently: true });
+ctx.imageSmoothingEnabled = false;
+
+// 描画はパレット番号(0-3)で行い、最後に実色へ変換する
+// 0:背景 1:前景 2:中間 3:アクセント
+const IDX = ['rgb(0,0,0)', 'rgb(1,0,0)', 'rgb(2,0,0)', 'rgb(3,0,0)'];
+const C_W = [244, 239, 216], C_K = [34, 32, 43], C_G = [127, 163, 122], C_R = [224, 84, 62];
+const pack = c => ((255 << 24) | (c[2] << 16) | (c[1] << 8) | c[0]) >>> 0;
+const DAY = new Uint32Array([C_W, C_K, C_G, C_R].map(pack));
+const NIGHT = new Uint32Array([C_K, C_W, C_G, C_R].map(pack));
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+let palFrom = DAY, palTo = DAY, palT = 0, nightShown = false;
+
+// ===== スプライト =====
+function spr(rows) {
+  const h = rows.length, w = rows[0].length;
+  if (rows.some(r => r.length !== w)) console.error('sprite width mismatch', rows);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d');
+  for (let y = 0; y < h; y++) for (let i = 0; i < w; i++) {
+    const ch = rows[y][i];
+    if (ch >= '0' && ch <= '3') { x.fillStyle = IDX[+ch]; x.fillRect(i, y, 1, 1); }
+  }
+  return c;
+}
+// ちびキャラ（12x12・2頭身）
+const CHIBI_HEAD = ['...33333....', '..333333333.', '..1111111...', '.111111011..', '.1111111111.', '..1111111...'];
+const CHIBI_BODY = [
+  ['...1111.....', '..111111....', '.1.1331.1...', '...1111.....', '..11..11....', '.11....11...'],
+  ['...1111.....', '..111111....', '...1331.1...', '...1111.....', '....111.....', '...11.11....'],
+  ['...1111.....', '..111111....', '1..1331..1..', '...1111.....', '..11..11....', '.11....11...'],
+  ['...1111.....', '..111111....', '.1.1331.....', '...1111.....', '....111.....', '....1111....'],
+];
+const S = {
+  run: CHIBI_BODY.map(b => spr([...CHIBI_HEAD, ...b])),
+  up: spr([...CHIBI_HEAD.slice(0, 5), '..1111111.1.', '...1111.11..', '..1111111...', '...1331.....', '...1111.....', '..11..11....', '..1....1....']),
+  fall: spr([...CHIBI_HEAD, '1..1111..1..', '.11111111...', '...1331.....', '...1111.....', '..11..11....', '.11....11...']),
+  slime: [
+    spr(['..1........1..', '..11......11..', '...11111111...', '..1111111111..', '.111111111111.', '.113311113311.',
+      '.113311113311.', '11111111111111', '11111000011111', '11111111111111', '.111111111111.']),
+    spr(['..............', '.1..........1.', '.11........11.', '..1111111111..', '.111111111111.', '11133111133111',
+      '11133111133111', '11111111111111', '11110000001111', '11111111111111', '11111111111111']),
+  ],
+  bat: [
+    spr(['1..............1', '11............11', '111...1..1...111', '.111.111111.111.', '..111131131111..',
+      '....11111111....', '.....1.11.1.....', '................', '................', '................']),
+    spr(['................', '................', '......1..1......', '11...111111...11', '1111113113111111',
+      '.11111111111111.', '....11111111....', '.....1.11.1.....', '................', '................']),
+    spr(['................', '................', '......1..1......', '.....111111.....', '....11311311....',
+      '...1111111111...', '..111.1111.111..', '.111...11...111.', '111..........111', '11............11']),
+  ],
+  // 踏めない敵：頭と側面に前景色のトゲ
+  spirit: [
+    spr(['..1...11...1..', '..11..11..11..', '...13333331...', '..3333333333..', '.333300003333.', '13330011003331',
+      '13330011003331', '.333300003333.', '..3333333333..', '...33333333...', '..3.333333.3..', '..3..3333..3..', '.....3..3.....']),
+    spr(['...1..11..1...', '..11..11..11..', '...13333331...', '..3333333333..', '.333300003333.', '13330001103331',
+      '13330001103331', '.333300003333.', '..3333333333..', '...33333333...', '.3..333333..3.', '...3.3333.3...', '......33......']),
+  ],
+  spike: spr(['..1....1....1..', '..1....1....1..', '.111..111..111.', '.111..111..111.', '11111.111.11111',
+    '111111111111111', '111111111111111', '111111111111111']),
+  tall: spr(['....1....', '...111...', '...111...', '1..111...', '11.111..1', '.11111.11', '...11111.', '...111...',
+    '...111..1', '1..111.11', '11.11111.', '.11111...', '...111...', '...111...', '...111...', '..11111..',
+    '.1111111.', '111111111']),
+  bullet: [
+    spr(['......3333..', '..3.33333311', '3...33333311', '..3.33333311', '......3333..']),
+    spr(['......3333..', '.3..33311111', '..3.33311111', '.3..33311111', '......3333..']),
+  ],
+  bulletO: ['......3333..', '..3.33333311', '3...33333311', '..3.33333311', '......3333..'].map(r => r.replace(/[0-3]/g, '0')),
+  wall: spr(['1..1..1..1..', '11.11.11.11.', '111111111111', '111110111111', '111110111111', '111110111111', '100000000001', '110111111101', '110111111101', '110111111101', '100000000001', '111110111111', '111110111111', '111110111111', '100000000001', '110111111101', '110111111101', '110111111101', '100000000001', '111110111111', '111110111111', '111110111111', '100000000001', '110111111101', '110111111101', '110111111101', '100000000001', '111110111111', '111110111111', '111110111111', '100000000001', '110111111101', '110111111101', '110111111101', '111111111111']),
+  clang: spr(['...1...', '.1.1.1.', '..111..', '1111111', '..111..', '.1.1.1.', '...1...']),
+  puff: [
+    spr(['............', '............', '............', '....3..3....', '.....33.....', '....3333....',
+      '....3333....', '.....33.....', '....3..3....', '............', '............', '............']),
+    spr(['............', '............', '...3....3...', '....1..1....', '............', '..1......1..',
+      '..1......1..', '............', '....1..1....', '...3....3...', '............', '............']),
+    spr(['3..........3', '.3........3.', '............', '............', '............', '1..........1',
+      '1..........1', '............', '............', '............', '.3........3.', '3..........3']),
+  ],
+  heart: spr(['.33.33.', '3333333', '3333333', '.33333.', '..333..', '...3...']),
+  heartE: spr(['.11.11.', '1..1..1', '1.....1', '.1...1.', '..1.1..', '...1...']),
+};
+
+const BULLET_O = spr(S.bulletO);
+
+// ===== 固有敵スプライト =====
+function hintOf(rows) { // 透明化中の点線シルエット
+  const h = rows.length, w = rows[0].length, on = (x, y) => x >= 0 && y >= 0 && x < w && y < h && rows[y][x] !== '.';
+  return spr(rows.map((r, y) => [...r].map((c, x) => (on(x, y) && (!on(x - 1, y) || !on(x + 1, y) || !on(x, y - 1) || !on(x, y + 1)) && (x + y) % 2 === 0) ? '3' : '.').join('')));
+}
+function rockFrame(a) {
+  const rows = [];
+  for (let y = 0; y < 14; y++) {
+    let r = '';
+    for (let x = 0; x < 14; x++) {
+      const dx = x - 6.5, dy = y - 6.5;
+      if (Math.hypot(dx, dy) > 6.9) { r += '.'; continue; }
+      let c = '1';
+      for (const off of [0, 2.2, 4.1]) {
+        const px = Math.cos(a + off), py = Math.sin(a + off), along = dx * px + dy * py, perp = Math.abs(-dx * py + dy * px);
+        if (along > 1 && along < (off ? 4.5 : 5.8) && perp < 0.55) c = '0';
+      }
+      r += c;
+    }
+    rows.push(r);
+  }
+  return spr(rows);
+}
+const MUSH = (sp, ft) => ['...111111...', '..1' + sp + sp + '11111..', '.1' + sp + sp + sp + sp + '11' + sp + sp + '1.', '.11' + sp + sp + '111' + sp + sp + '1.', '111111111111', '111111111111',
+  '...100001...', '...130031...', '...100001...', '...100001...', ft];
+const MINI = (sp, ft) => ['..1111..', '.1' + sp + '11' + sp + '1.', '11111111', '..1001..', '..3003..', '..1001..', ft];
+const FROG_TOP = sp => ['..111....111..', '.11031..11031.', '.111' + sp + '111' + sp + '1111.', '11111111111111', '11110000001111', '11111111111111', '.111111111111.'];
+const FROG_SIT = ['11.11....11.11', '11.1......1.11', '111........111'];
+const FROG_JMP = ['.1..1....1..1.', '1..1......1..1', '1............1'];
+const OWL_TOP = ['..1........1..', '..11......11..', '...11111111...', '..1003113001..', '..1000110001..'];
+const OWL_UP = mark => ['1..11133111..1', '11.11111111.11', '11111' + mark + '11111', '.11.111111.11.'];
+const OWL_DN = mark => ['...11133111...', '..1111111111..', '.1111' + mark + '1111.', '11..111111..11'];
+const OWL_BOT = ['....111111....', '....1.11.1....', '..............'];
+// ゴースト：踏める敵と同じ前景色の体（目の色で昼夜を区別）
+const GHOST = eye => ['....1111....', '..11111111..', '.1111111111.', '.11' + eye + eye + '11' + eye + eye + '11.', '.11' + eye + eye + '11' + eye + eye + '11.', '111111111111',
+  '111110011111', '111111111111', '111111111111', '111111111111'];
+const GHOST_FT = ['1.11.11.11.1', '.11.11.11.11'];
+const BEE_WING = [['....11.11...', '...1001001..', '...1001001..'], ['............', '............', '..1001001...']];
+const BEE_BODY = n => n
+  ? ['..11111111..', '.1131313131.', '.11113131313', '..11111111..', '...1..1.....']
+  : ['..11111111..', '.1131010101.', '.11110101011', '..11111111..', '...1..1.....'];
+Object.assign(S, {
+  bee: BEE_WING.map(w => spr([...w, ...BEE_BODY(false)])),
+  hornet: BEE_WING.map(w => spr([...w, ...BEE_BODY(true)])),
+  mush: [spr(MUSH('0', '..11....11..')), spr(MUSH('0', '...11..11...'))],
+  mushP: [spr(MUSH('3', '..11....11..')), spr(MUSH('3', '...11..11...'))],
+  mini: [spr(MINI('0', '.11..11.')), spr(MINI('0', '..11.11.'))],
+  miniP: [spr(MINI('3', '.11..11.')), spr(MINI('3', '..11.11.'))],
+  rock: [0, 1, 2, 3, 4, 5].map(i => rockFrame(-i * Math.PI / 3)),
+  frog: [spr([...FROG_TOP('1'), ...FROG_SIT]), spr([...FROG_TOP('1'), ...FROG_JMP])],
+  frogN: [spr([...FROG_TOP('3'), ...FROG_SIT]), spr([...FROG_TOP('3'), ...FROG_JMP])],
+  owl: [spr([...OWL_TOP, ...OWL_UP('1111'), ...OWL_BOT]), spr([...OWL_TOP, ...OWL_DN('1111'), ...OWL_BOT])],
+  owlN: [spr([...OWL_TOP, ...OWL_UP('3333'), ...OWL_BOT]), spr([...OWL_TOP, ...OWL_DN('3333'), ...OWL_BOT])],
+  ghost: GHOST_FT.map(ft => spr([...GHOST('0'), ft])),
+  ghostN: GHOST_FT.map(ft => spr([...GHOST('3'), ft])),
+});
+S.ghostHint = hintOf([...GHOST('0'), GHOST_FT[0]]);
+
+// ===== ピクセルフォント(3x5) =====
+const FONT = {
+  '0': '111101101101111', '1': '010110010010111', '2': '111001111100111', '3': '111001111001111', '4': '101101111001001',
+  '5': '111100111001111', '6': '111100111101111', '7': '111001001010010', '8': '111101111101111', '9': '111101111001111',
+  A: '010101111101101', B: '110101110101110', C: '011100100100011', D: '110101101101110', E: '111100110100111',
+  F: '111100110100100', G: '011100101101011', H: '101101111101101', I: '111010010010111', J: '001001001101010',
+  K: '101101110101101', L: '100100100100111', M: '101111111101101', N: '110101101101101', O: '010101101101010',
+  P: '110101110100100', Q: '010101101110011', R: '110101110101101', S: '011100010001110', T: '111010010010010',
+  U: '101101101101111', V: '101101101101010', W: '101101111111101', X: '101101010101101', Y: '101101010010010',
+  Z: '111001010100111', ':': '000010000010000', '-': '000000111000000', '!': '010010010000010', '/': '001001010100100',
+  '.': '000000000000010', '+': '000010111010000',
+};
+function glyphs(s, x, y, sc) {
+  for (const ch of s) {
+    const g = FONT[ch];
+    if (g) for (let i = 0; i < 15; i++) if (g[i] === '1') ctx.fillRect(x + (i % 3) * sc, y + ((i / 3) | 0) * sc, sc, sc);
+    x += 4 * sc;
+  }
+}
+function text(s, x, y, c = 1, sc = 1, align = 'left') {
+  s = String(s).toUpperCase();
+  const w = s.length * 4 * sc - sc;
+  if (align === 'center') x = Math.round(x - w / 2); else if (align === 'right') x -= w;
+  ctx.fillStyle = IDX[0];
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) glyphs(s, x + dx, y + dy, sc);
+  ctx.fillStyle = IDX[c];
+  glyphs(s, x, y, sc);
+}
+function button(x, y, w, h, label) {
+  ctx.fillStyle = IDX[1]; ctx.fillRect(x - 2, y - 2, w + 4, h + 4);
+  ctx.fillStyle = IDX[2]; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = IDX[0]; ctx.fillRect(x, y, w, 1); ctx.fillRect(x, y, 1, h);
+  ctx.fillStyle = IDX[1]; ctx.fillRect(x, y + h - 1, w, 1); ctx.fillRect(x + w - 1, y, 1, h);
+  text(label, x + w / 2, y + h / 2 - 2, 1, 1, 'center');
+}
+
+// ===== 背景レイヤー（事前描画） =====
+const LW = 640;
+function makeLayer(h, fn) { const c = document.createElement('canvas'); c.width = LW; c.height = h; const x = c.getContext('2d'); fn(x); return c; }
+const TW = Math.PI * 2 / LW;
+const rngOf = seed => () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const wrap3 = (x, fn) => { for (const ox of [0, -LW, LW]) fn(x + ox); };
+// 遠景：中間色のベタ塗りシルエット（最低高さ24px＝中景は必ずこの内側に収まる）
+function farLayer(hFn, step, extra) {
+  return makeLayer(90, x => {
+    x.fillStyle = IDX[2];
+    for (let cx = 0; cx < LW; cx += step) {
+      const h = Math.max(24, Math.min(88, Math.round(hFn(cx) / 2) * 2));
+      x.fillRect(cx, 90 - h, step, h);
+    }
+    if (extra) extra(x);
+  });
+}
+const tri = v => 1 - Math.abs(((v % 1) + 1) % 1 * 2 - 1);
+// ① 森
+const farForest = farLayer(cx => 54 + 16 * Math.sin(cx * TW * 2) + 9 * Math.sin(cx * TW * 5 + 1) + 4 * Math.sin(cx * TW * 11 + 2), 4);
+const midForest = makeLayer(22, x => {
+  const r = rngOf(7); x.fillStyle = IDX[0];
+  for (let tx = 6; tx < LW; tx += 14 + Math.floor(r() * 20)) {
+    const th = 12 + Math.floor(r() * 9);
+    wrap3(tx, X => {
+      for (let row = 0; row < th - 3; row++) { const hw = Math.floor(row * 0.42) - ((row % 5 === 4) ? 1 : 0); if (hw >= 0) x.fillRect(X - hw, 22 - th + row, hw * 2 + 1, 1); }
+      x.fillRect(X, 19, 1, 3);
+    });
+  }
+});
+// ② 荒野（メサ＋サボテン）
+const mesa = (() => {
+  const hs = new Array(LW).fill(26), r = rngOf(31);
+  for (let mx = 0; mx < LW; mx += 70 + Math.floor(r() * 90)) {
+    const w = 50 + Math.floor(r() * 80), hm = 40 + Math.floor(r() * 30);
+    for (let i = 0; i < w; i++) {
+      const edge = Math.min(i, w - 1 - i), h = Math.min(hm, 26 + Math.floor(edge / 5) * 9);
+      const X = (mx + i) % LW; hs[X] = Math.max(hs[X], h);
+    }
+  }
+  return hs;
+})();
+const farWaste = farLayer(cx => mesa[cx], 2, x => {
+  x.fillStyle = IDX[0];                                  // 地層の線
+  for (let cx = 0; cx < LW; cx += 2) for (const lh of [34, 48]) if (mesa[cx] > lh + 3 && (cx >> 2) % 3 !== 0) x.fillRect(cx, 90 - lh, 2, 1);
+});
+const midWaste = makeLayer(22, x => {
+  const r = rngOf(11); x.fillStyle = IDX[0];
+  for (let tx = 10; tx < LW; tx += 26 + Math.floor(r() * 40)) {
+    if (r() < 0.65) {                                     // サボテン
+      const th = 12 + Math.floor(r() * 9), ah = 4 + Math.floor(r() * 4);
+      wrap3(tx, X => {
+        x.fillRect(X - 1, 22 - th, 3, th);
+        x.fillRect(X - 4, 22 - th + ah + 3, 3, 2); x.fillRect(X - 4, 22 - th + ah - 1, 2, 5);
+        x.fillRect(X + 2, 22 - th + ah + 5, 3, 2); x.fillRect(X + 3, 22 - th + ah + 1, 2, 5);
+      });
+    } else wrap3(tx, X => { x.fillRect(X - 4, 19, 9, 3); x.fillRect(X - 2, 17, 5, 2); }); // 岩
+  }
+});
+// ③ 湖畔（なだらかな丘＋水面と葦）
+const farLake = farLayer(cx => 40 + 8 * Math.sin(cx * TW * 2 + 0.5) + 5 * Math.sin(cx * TW * 7 + 1), 4);
+const midLake = makeLayer(22, x => {
+  const r = rngOf(5);
+  x.fillStyle = IDX[0]; x.fillRect(0, 9, LW, 13);
+  x.fillStyle = IDX[2];
+  for (const ry of [11, 14, 17, 20]) for (let rx = Math.floor(r() * 20); rx < LW; rx += 18 + Math.floor(r() * 26)) x.fillRect(rx, ry, 3 + Math.floor(r() * 5), 1);
+  for (let tx = 8; tx < LW; tx += 40 + Math.floor(r() * 60)) {
+    const n = 3 + Math.floor(r() * 3);
+    for (let i = 0; i < n; i++) {
+      const X = tx + i * 3, rh = 5 + Math.floor(r() * 5);
+      wrap3(X, XX => { x.fillRect(XX, 22 - rh, 1, rh); if (i % 2 === 0) x.fillRect(XX - 0, 22 - rh - 2, 2, 3); });
+    }
+  }
+});
+// ④ 雪山（尖った峰＋雪冠）
+const snowH = cx => 42 + 30 * tri(cx / 160) + 12 * tri(cx / 53 + 0.3) + 4 * tri(cx / 17);
+const farSnow = farLayer(snowH, 2, x => {
+  x.fillStyle = IDX[0];
+  // 雪冠は背景色。空と同色なので、上辺と斜面に中間色のフチを1px残す
+  const hh = cx => Math.round(snowH(((cx % LW) + LW) % LW) / 2) * 2;
+  for (let cx = 0; cx < LW; cx += 2) {
+    const h = hh(cx), line = 68 + ((cx >> 1) % 3) * 2;
+    if (h <= line + 2) continue;
+    const y0 = 90 - Math.min(h, hh(cx - 2), hh(cx + 2)) + 1, y1 = 90 - line;
+    if (y1 > y0) x.fillRect(cx, y0, 2, y1 - y0);
+  }
+});
+const midSnow = makeLayer(22, x => {
+  const r = rngOf(17); x.fillStyle = IDX[0];
+  for (let tx = 4; tx < LW; tx += 12 + Math.floor(r() * 26)) {
+    const th = 9 + Math.floor(r() * 7);
+    wrap3(tx, X => { for (let row = 0; row < th - 2; row++) { const hw = Math.floor(row * 0.34); x.fillRect(X - hw, 22 - th + row, hw * 2 + 1, 1); } x.fillRect(X, 20, 1, 2); });
+  }
+  for (let mx = 0; mx < LW; mx += 30 + Math.floor(r() * 30)) wrap3(mx, X => { x.fillRect(X, 20, 12, 2); x.fillRect(X + 3, 19, 6, 1); });
+});
+// ⑤ 古城・墓地
+const farGrave = farLayer(cx => 30 + 6 * Math.sin(cx * TW * 3) + 3 * Math.sin(cx * TW * 8 + 2), 4, x => {
+  const cx0 = 110;
+  x.fillStyle = IDX[2];
+  x.fillRect(cx0, 90 - 58, 70, 58);                                   // 城壁
+  for (let i = 0; i < 70; i += 6) x.fillRect(cx0 + i, 90 - 61, 3, 3);
+  x.fillRect(cx0 - 10, 90 - 76, 14, 76); x.fillRect(cx0 - 12, 90 - 79, 18, 4);   // 左塔
+  for (let i = 0; i < 18; i += 4) x.fillRect(cx0 - 12 + i, 90 - 82, 2, 3);
+  x.fillRect(cx0 + 62, 90 - 84, 16, 84);                                          // 右塔と尖塔
+  for (let i = 0; i < 9; i++) x.fillRect(cx0 + 62 + i, 90 - 84 - (9 - i) * 1.4 | 0, 16 - i * 2, 2);
+  x.fillStyle = IDX[0];
+  for (const [wx, wy] of [[cx0 - 5, 90 - 68], [cx0 + 68, 90 - 72], [cx0 + 68, 90 - 58], [cx0 + 20, 90 - 44], [cx0 + 44, 90 - 44]]) x.fillRect(wx, wy, 3, 5);
+  x.fillRect(cx0 + 30, 90 - 30, 10, 30); x.fillRect(cx0 + 31, 90 - 32, 8, 2);      // 門
+});
+const midGrave = makeLayer(22, x => {
+  const r = rngOf(23); x.fillStyle = IDX[0];
+  for (let tx = 6; tx < LW; tx += 18 + Math.floor(r() * 26)) {
+    const k = r();
+    if (k < 0.45) wrap3(tx, X => { x.fillRect(X, 14, 7, 8); x.fillRect(X + 1, 13, 5, 1); x.fillRect(X + 2, 12, 3, 1); });   // 墓石
+    else if (k < 0.8) wrap3(tx, X => { x.fillRect(X + 2, 11, 2, 11); x.fillRect(X, 13, 6, 2); });                          // 十字架
+    else wrap3(tx, X => {                                                                                                 // 枯れ木
+      x.fillRect(X + 3, 6, 2, 16); x.fillRect(X, 8, 3, 1); x.fillRect(X, 5, 1, 3); x.fillRect(X + 5, 10, 3, 1); x.fillRect(X + 7, 7, 1, 3); x.fillRect(X + 4, 3, 1, 3);
+    });
+  }
+});
+const THEMES = [
+  { name: 'FOREST', far: farForest, mid: midForest },
+  { name: 'WASTELAND', far: farWaste, mid: midWaste },
+  { name: 'LAKESIDE', far: farLake, mid: midLake },
+  { name: 'SNOW PEAK', far: farSnow, mid: midSnow },
+  { name: 'GRAVEYARD', far: farGrave, mid: midGrave },
+];
+let curTheme = 0;
+const themeStart = [0, 0, 0, 0, 0];
+let seed = 99; const srand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const specks = Array.from({ length: 18 }, () => ({ x: Math.floor(srand() * LW), y: GROUND + 6 + Math.floor(srand() * 20), w: 1 + Math.floor(srand() * 2) }));
+const stars = Array.from({ length: 55 }, () => ({ x: Math.floor(srand() * LW), y: 4 + Math.floor(srand() * 90), big: srand() < 0.15, ph: srand() * 6 }));
+
+function disc(cx, cy, r, c) {
+  ctx.fillStyle = IDX[c];
+  for (let y = -r; y <= r; y++) { const w = Math.floor(Math.sqrt(r * r - y * y + r * 0.8)); ctx.fillRect(cx - w, cy + y, w * 2 + 1, 1); }
+}
+
+// ===== サウンド（8bit風） =====
+let AC = null, muted = false;
+function initAudio() {
+  if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { AC = null; } }
+  if (AC && AC.state === 'suspended') AC.resume();
+  bgmInit();
+}
+function tone(f1, f2, dur, type = 'square', vol = 0.07, delay = 0) {
+  if (!AC || muted) return;
+  const t = AC.currentTime + delay, o = AC.createOscillator(), g = AC.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f1, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(f2, 1), t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.setValueAtTime(vol, t + dur * 0.6); g.gain.linearRampToValueAtTime(0, t + dur);
+  o.connect(g).connect(AC.destination); o.start(t); o.stop(t + dur + 0.02);
+  duck(t + dur);
+}
+function noise(dur, vol = 0.07, delay = 0) {
+  if (!AC || muted) return;
+  const len = Math.floor(AC.sampleRate * dur), buf = AC.createBuffer(1, len, AC.sampleRate), d = buf.getChannelData(0);
+  let v = 0; for (let i = 0; i < len; i++) { if (i % 6 === 0) v = Math.random() * 2 - 1; d[i] = v * (1 - i / len); }
+  const s = AC.createBufferSource(), g = AC.createGain(); s.buffer = buf; g.gain.value = vol;
+  s.connect(g).connect(AC.destination); s.start(AC.currentTime + delay);
+  duck(AC.currentTime + delay + dur);
+}
+
+// ===== BGM（2声のみ：うっすらパルス＋三角ベース。効果音の間は消える） =====
+const BGM_VOL = 1;
+let bgmOut = null, pulseWave = null, duckUntil = 0, bgmKey = '', bgmStep = 0, bgmNext = 0;
+function bgmInit() {
+  if (bgmOut || !AC) return;
+  bgmOut = AC.createGain(); bgmOut.gain.value = BGM_VOL; bgmOut.connect(AC.destination);
+  const n = 16, re = new Float32Array(n), im = new Float32Array(n);
+  for (let i = 1; i < n; i++) re[i] = 2 / (i * Math.PI) * Math.sin(i * Math.PI * 0.25);   // デューティ25%のパルス
+  pulseWave = AC.createPeriodicWave(re, im);
+}
+function duck(until) {                    // 効果音が鳴っている間だけBGMを0に
+  if (!bgmOut) return;
+  const now = AC.currentTime; duckUntil = Math.max(duckUntil, until);
+  const gg = bgmOut.gain; gg.cancelScheduledValues(now); gg.setValueAtTime(0, now);
+  gg.setValueAtTime(0, duckUntil); gg.linearRampToValueAtTime(BGM_VOL, duckUntil + 0.12);
+}
+// 各セット：lead / bass は8分音符16ステップ（0=休符）、step=1ステップの秒数
+const _ = 0;
+const SONGS = [
+  { step: 0.20, lead: [72, _, 76, _, 79, _, 76, _, 74, _, 77, _, 76, _, _, _], bass: [48, _, _, _, 55, _, _, _, 57, _, _, _, 55, _, _, _] },   // 森
+  { step: 0.24, lead: [69, _, _, 72, _, _, 76, _, 74, _, _, 72, _, _, 69, _], bass: [45, _, _, _, 52, _, _, _, 43, _, _, _, 52, _, _, _] },   // 荒野
+  { step: 0.28, lead: [77, _, _, _, 72, _, _, _, 74, _, _, _, 69, _, _, _], bass: [41, _, _, _, 48, _, _, _, 46, _, _, _, 48, _, _, _] },     // 湖畔
+  { step: 0.22, lead: [86, _, 81, _, _, _, 84, _, _, _, 81, _, 79, _, _, _], bass: [50, _, _, _, _, _, _, _, 46, _, _, _, _, _, _, _] },     // 雪山
+  { step: 0.26, lead: [76, _, _, 75, _, _, 76, _, _, _, 79, _, _, _, _, _], bass: [40, _, 47, _, 40, _, 47, _, 39, _, 46, _, 39, _, 46, _] }, // 墓地
+];
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+function bgmNote(m, t, dur, lead, night) {
+  const o = AC.createOscillator(), g = AC.createGain(), v = lead ? (night ? 0.035 : 0.022) : 0.04;
+  if (lead && !night) o.setPeriodicWave(pulseWave); else o.type = 'triangle';
+  o.frequency.setValueAtTime(mtof(m), t);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v, t + 0.01);
+  g.gain.setValueAtTime(v * 0.7, t + dur * 0.5); g.gain.linearRampToValueAtTime(0, t + dur);
+  o.connect(g).connect(bgmOut); o.start(t); o.stop(t + dur + 0.02);
+}
+function bgmUpdate() {
+  if (!AC || !bgmOut) return;
+  const playing = state === 'play' && !paused && !muted;
+  if (!playing) { bgmKey = ''; return; }
+  const set = Math.floor((phase - 1) / 2) % 5, night = phase % 2 === 0, key = set + (night ? 'n' : 'd');
+  const S0 = SONGS[set], step = S0.step * (night ? 1.15 : 1);   // 夜：三角波でゆっくり
+  if (key !== bgmKey) { bgmKey = key; bgmStep = 0; bgmNext = AC.currentTime + 0.1; }
+  while (bgmNext < AC.currentTime + 0.2) {
+    const i = bgmStep % 16;
+    for (const [arr, lead] of [[S0.lead, true], [S0.bass, false]]) {
+      const m = arr[i]; if (!m) continue;
+      let len = 1; while (len < 8 && !arr[(i + len) % 16]) len++;
+      bgmNote(m, bgmNext, step * len * 0.9, lead, night);
+    }
+    bgmStep++; bgmNext += step;
+  }
+}
+const SFX = {
+  jump: () => tone(300, 620, 0.1),
+  dj: () => { tone(500, 900, 0.08); tone(1600, 300, 0.1, 'square', 0.06, 0.02); },
+  stomp: () => { tone(260, 780, 0.09, 'square', 0.08); },
+  kill: () => { noise(0.22, 0.1); tone(900, 120, 0.18, 'square', 0.05, 0.02); tone(1320, 1320, 0.05, 'square', 0.04, 0.12); },
+  hoot: () => { tone(420, 330, 0.12, 'triangle', 0.1); tone(420, 330, 0.14, 'triangle', 0.1, 0.16); },
+  clang: () => { tone(1800, 1500, 0.06, 'square', 0.07); tone(2400, 2000, 0.08, 'square', 0.04, 0.03); },
+  hit: () => { tone(340, 60, 0.3, 'sawtooth', 0.09); noise(0.18, 0.06); },
+  phase: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, f, 0.09, 'square', 0.06, i * 0.09)),
+  start: () => [392, 523, 659].forEach((f, i) => tone(f, f, 0.08, 'square', 0.06, i * 0.07)),
+  over: () => [392, 330, 262, 196].forEach((f, i) => tone(f, f * 0.97, 0.16, 'triangle', 0.12, i * 0.17)),
+  warn: () => [0, 1, 2].forEach(i => { tone(880, 440, 0.18, 'square', 0.06, i * 0.3); }),
+  bossHit: () => { tone(220, 90, 0.12, 'square', 0.08); noise(0.08, 0.06); },
+  boom: () => { noise(0.35, 0.12); tone(160, 40, 0.4, 'sawtooth', 0.08); },
+  clear: () => [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, f, 0.11, 'square', 0.06, i * 0.1)),
+};
+
+// ===== ハイスコア =====
+let hi = 0;
+try { hi = +localStorage.getItem('monsterDashHi') || 0; } catch (e) {}
+function saveHi() { try { localStorage.setItem('monsterDashHi', String(hi)); } catch (e) {} }
+
+// ===== ゲーム状態 =====
+const TYPES = {
+  spike:  { solid: true, frames: [S.spike], stomp: false, vx: 0,  fps: 0,  hb: [1, 1, 13, 7] },
+  tall:   { solid: true, frames: [S.tall],  stomp: false, vx: 0,  fps: 0,  hb: [2, 0, 5, 18] },
+  slime:  { frames: S.slime,   stomp: true,  vx: 25, fps: 6,  hb: [1, 2, 12, 9] },
+  bat:    { frames: [S.bat[0], S.bat[1], S.bat[2], S.bat[1]], stomp: true, vx: 35, fps: 12, hb: [2, 2, 12, 6] },
+  bed:    { solid: true, frames: [S.spike], stomp: false, vx: 0,  fps: 0,  hb: [1, 1, 13, 7] },
+  wall:   { solid: true, frames: [S.wall],  stomp: false, vx: 0,  fps: 0,  hb: [1, 0, 10, 35] },
+  spirit: { frames: S.spirit,  stomp: false, vx: 12, fps: 5,  hb: [2, 0, 10, 12] },
+  // --- 固有敵（セットごと：昼=通常 / 夜=変異） ---
+  bee:    { frames: S.bee,    stomp: true, vx: 30, fps: 14, hb: [1, 3, 10, 6], upd: updBee, amp: 14, per: 1.2 },
+  hornet: { frames: S.hornet, stomp: true, vx: 55, fps: 18, hb: [1, 3, 10, 6], upd: updBee, amp: 22, per: 0.8 },
+  mush:   { frames: S.mush,  stomp: true, vx: 20, fps: 5, hb: [1, 1, 10, 10], split: 2, child: 'mini' },
+  mushP:  { frames: S.mushP, stomp: true, vx: 20, fps: 5, hb: [1, 1, 10, 10], split: 3, child: 'miniP' },
+  mini:   { frames: S.mini,  stomp: true, vx: 0, fps: 9, hb: [0, 1, 8, 6], upd: (e, dt, k) => gravity(e, dt, k) },
+  miniP:  { frames: S.miniP, stomp: true, vx: 0, fps: 9, hb: [0, 1, 8, 6], upd: (e, dt, k) => gravity(e, dt, k) },
+  rock:   { solid: true, frames: S.rock, stomp: false, vx: 70, fps: 14, hb: [1, 1, 12, 12] },
+  rockB:  { solid: true, frames: S.rock, stomp: false, vx: 55, fps: 14, hb: [1, 1, 12, 12], upd: (e, dt, k) => { if (e.vy === undefined) { const v = rand(-253, 253); e.vy = v * k; e.y = GROUND - e.h - (253 * 253 - v * v) / 1000; e.onG = false; } gravity(e, dt, k, 500); if (e.onG) { e.vy = -253 * k; e.onG = false; } } },  // 低重力で約64px（プレイヤーの通常ジャンプ程度）・滞空約1秒
+  frog:   { frames: S.frog,  stomp: true, vx: 0, fps: 0, hb: [1, 1, 12, 9], upd: updFrog, frameFn: e => e.T.frames[e.onG === false ? 1 : 0] },
+  frogN:  { frames: S.frogN, stomp: true, vx: 0, fps: 0, hb: [1, 1, 12, 9], upd: updFrog, night: true, frameFn: e => e.T.frames[e.onG === false ? 1 : 0] },
+  owl:    { frames: S.owl,   stomp: true, vx: 30, fps: 8, hb: [2, 2, 10, 8], upd: updOwl, frameFn: owlFrame },
+  owlN:   { frames: S.owlN,  stomp: true, vx: 30, fps: 8, hb: [2, 2, 10, 8], upd: updOwl, night: true, frameFn: owlFrame },
+  ghost:  { frames: S.ghost,  stomp: true,  vx: 15, fps: 4, hb: [1, 1, 10, 9], upd: updGhost },
+  ghostN: { frames: S.ghostN, stomp: true,  vx: 15, fps: 4, hb: [1, 1, 10, 9], upd: updGhost, night: true },
+};
+const UNIQUE = [['bee', 'hornet'], ['rock', 'rockB'], ['frog', 'frogN'], ['owl', 'owlN'], ['ghost', 'ghostN']];
+const GHOST_ALTS = () => [rand(4, 10), rand(28, 46), rand(58, 74)];
+// 重力付きの敵。着地した瞬間に true を返す
+function gravity(e, dt, k, g = 900) {
+  e.vy = (e.vy || 0) + g * k * k * dt; e.y += e.vy * dt;
+  if (e.y >= GROUND - e.h) { e.y = GROUND - e.h; const landed = e.onG === false; e.vy = 0; e.onG = true; return landed; }
+  e.onG = false; return false;
+}
+// ハチ：三角波でジグザグに上下（夜のスズメバチは振れ幅が大きく速い）
+function updBee(e) {
+  const ph = (e.t / e.T.per) % 1, tw = 1 - Math.abs(ph * 2 - 1) * 2;
+  e.y = e.baseY + Math.round(tw * e.T.amp);
+}
+function updFrog(e, dt, k, speed) {
+  const sp = speedMul / k;
+  if (e.onG === undefined) { e.onG = true; e.cd = rand(0, 1.0); e.trig = rand(0.85, 1.15); }
+  if (e.onG) {
+    e.vxo = 0; e.cd -= dt;
+    if (e.T.night && !e.big) {
+      if (e.x < p.x + 175 * sp * e.trig) {        // 高く跳んで、プレイヤーの少し前に落ちてくる
+        e.big = true; const air = 2 * 355 / (900 * k);
+        e.vxo = Math.max(0, (e.x - (p.x + 46)) / air - speed); e.vy = -355 * k; e.onG = false; tone(300, 900, 0.18, 'square', 0.05);
+      }
+      return;
+    }
+    if (e.cd <= 0) { e.vy = -250 * k; e.vxo = 50; e.onG = false; tone(400, 700, 0.06, 'square', 0.03); }
+  } else if (gravity(e, dt, k)) { e.vxo = 0; e.cd = 0.9 / k; }
+}
+function owlFrame(e) {
+  const F = e.T.frames;
+  if (e.st === 'dive' || e.st === 'low') return F[1];
+  if (e.st === 'warn') return F[Math.floor(e.t * 24) % 2];
+  return F[Math.floor(e.t * 8) % 2];
+}
+function updOwl(e, dt, k, speed) {
+  const sp = speedMul / k;
+  if (!e.st) { e.st = 'fly'; e.trig = rand(0.85, 1.2); }
+  if (e.st === 'fly' || e.st === 'done') {
+    e.y = e.baseY + Math.round(Math.sin(e.t * 5) * 3);
+    if (e.st === 'fly' && e.x < p.x + 165 * sp * e.trig) { e.st = 'warn'; e.wt = 0.3 / k; e.vxo = -speed * 0.5; SFX.hoot(); }
+  } else if (e.st === 'warn') {
+    e.wt -= dt;
+    if (e.wt <= 0) {                     // プレイヤーの少し前の地面すれすれへ斜めに急降下
+      const tx = p.x + 62 * sp, ty = GROUND - 4 - e.h, dur = 0.45 / k;
+      e.st = 'dive'; e.dur = dur; e.vxo = Math.max(-speed * 0.5, (e.x - tx) / dur - speed); e.vyd = (ty - e.y) / dur; e.ty = ty;
+    }
+  } else if (e.st === 'dive') {
+    e.y += e.vyd * dt; e.dur -= dt;
+    if (e.dur <= 0 || e.y >= e.ty) {
+      e.y = e.ty;
+      if (e.T.night) { e.st = 'rise'; e.vyd = -e.vyd; } else { e.st = 'low'; e.vxo = 40; }
+    }
+  } else if (e.st === 'rise') {          // 夜：V字に再上昇
+    e.y += e.vyd * dt;
+    if (e.y <= e.baseY) { e.y = e.baseY; e.st = 'done'; e.vxo = 30; }
+  }
+}
+function updGhost(e, dt) {
+  if (e.cyc === undefined) e.cyc = rand(0, 2.0);
+  e.cyc += dt;
+  const ph = e.cyc % 2.0;
+  e.hidden = ph > 1.3;
+  if (e.T.night) {                       // 夜：消えている間に高さを変える
+    if (e.hidden && !e.moved && ph > 1.45) {
+      e.moved = true;
+      const cur = GROUND - e.baseY - e.h, opts = GHOST_ALTS().filter(a => Math.abs(a - cur) > 15);
+      e.baseY = Math.max(ENEMY_TOP + 3, GROUND - opts[Math.floor(Math.random() * opts.length)] - e.h);
+    }
+    if (!e.hidden) e.moved = false;
+  }
+  e.y = e.baseY + Math.round(Math.sin(e.t * 3) * 3);
+}
+
+// ===== ボス（各セットの夜の最後に出現） =====
+function canv(w, h, fn) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d');
+  const R = (ci, X, Y, w_, h_) => { x.fillStyle = IDX[ci]; x.fillRect(X, Y, w_, h_); };
+  const ew = (rx, ry, dy) => Math.round(rx * Math.sqrt(Math.max(0, 1 - (dy / (ry + 0.5)) ** 2)));
+  const E = (ci, cx, cy, rx, ry) => { for (let y = -ry; y <= ry; y++) { const w = ew(rx, ry, y); R(ci, cx - w, cy + y, w * 2 + 1, 1); } };
+  const OE = (ci, cx, cy, rx, ry, oc = 1) => { E(oc, cx, cy, rx + 1, ry + 1); E(ci, cx, cy, rx, ry); };
+  fn(R, E, OE, x, ew);
+  return c;
+}
+function silhouette(img, ci) {
+  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+  const x = c.getContext('2d'); x.drawImage(img, 0, 0);
+  x.globalCompositeOperation = 'source-in'; x.fillStyle = IDX[ci]; x.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+// 女王バチ（44x92）：縦長の縞腹、王冠、羽ばたき
+const QUEEN = f => canv(44, 92, (R, E, OE, x, ew) => {
+  const wy = f ? 20 : 27;
+  OE(0, 9, wy, 8, 12); OE(0, 35, wy, 8, 12); R(2, 8, wy - 5, 2, 10); R(2, 34, wy - 5, 2, 10);
+  OE(1, 22, 61, 13, 25);
+  for (let dy = -24; dy <= 24; dy++) { const w = ew(13, 25, dy); if (((dy + 24) >> 2) % 2) R(3, 22 - w + 1, 61 + dy, w * 2 - 1, 1); }
+  R(1, 20, 86, 5, 3); R(1, 21, 89, 3, 2); R(1, 22, 91, 1, 1);
+  OE(1, 22, 31, 10, 8); R(2, 14, 28, 17, 2);
+  R(1, 10, 36, 4, 1); R(1, 9, 37, 1, 3); R(1, 31, 36, 4, 1); R(1, 35, 37, 1, 3);
+  OE(1, 22, 15, 8, 7); R(3, 16, 12, 4, 4); R(3, 25, 12, 4, 4); R(0, 17, 13, 1, 1); R(0, 26, 13, 1, 1);
+  R(3, 15, 5, 15, 2); R(3, 15, 1, 2, 4); R(3, 21, 0, 3, 5); R(3, 28, 1, 2, 4);
+});
+// 岩の怪物（48x88）：体は弾を弾き、胸の光る核だけが弱点
+const GOLEM = f => canv(48, 88, (R, E, OE) => {
+  OE(1, 14, 78, 8, 9, 0); OE(1, 34, 78, 8, 9, 0);
+  OE(1, 5, 44, 5, 13, 0); OE(1, 43, 44, 5, 13, 0);
+  OE(1, 24, 43, 19, 24, 0);
+  OE(1, 24, 13, 13, 11, 0);
+  R(2, 16, 4, 12, 2); R(2, 9, 22, 8, 2); R(2, 30, 22, 9, 2); R(2, 2, 34, 4, 2); R(2, 42, 34, 4, 2);
+  R(2, 10, 27, 6, 1); R(2, 15, 28, 1, 3); R(2, 32, 62, 7, 1); R(2, 31, 58, 1, 4); R(2, 11, 60, 5, 1); R(2, 36, 18, 4, 1); R(2, 10, 76, 4, 1); R(2, 33, 80, 4, 1);
+  R(0, 14, 10, 8, 5); R(0, 27, 10, 8, 5); R(3, 16, 11, 4, 3); R(3, 29, 11, 4, 3);
+  OE(3, 24, 38, 9, 16, 0);
+  if (f) E(0, 24, 38, 3, 8); else E(0, 22, 31, 2, 3);
+});
+// でかいカエル（46x80）：湖畔の岩の上に高く座る。喉袋がふくらむ
+const FROGB = f => canv(46, 80, (R, E, OE) => {
+  R(1, 1, 46, 44, 34); R(0, 2, 47, 42, 33);
+  R(2, 8, 56, 7, 1); R(2, 14, 57, 1, 4); R(2, 28, 64, 8, 1); R(2, 34, 60, 1, 4); R(2, 7, 70, 6, 1); R(2, 22, 74, 5, 1);
+  OE(1, 7, 42, 6, 5, 0); OE(1, 39, 42, 6, 5, 0);
+  OE(1, 23, 33, 19, 13, 0); E(2, 23, 38, 12, 7);
+  R(2, 9, 26, 3, 2); R(2, 34, 25, 3, 2); R(2, 30, 29, 2, 2);
+  OE(0, 12, 19, 6, 6, 1); OE(0, 34, 19, 6, 6, 1); R(1, 12, 17, 3, 5); R(1, 34, 17, 3, 5);
+  R(3, 9, 33, 28, 1); R(3, 8, 32, 1, 1); R(3, 37, 32, 1, 1);
+  if (f) OE(3, 23, 43, 8, 5, 0); else OE(3, 23, 42, 5, 3, 0);
+});
+// 巨大な鳥（48x96）：雪山の崖に止まる猛禽
+const EAGLE = f => canv(48, 96, (R, E, OE) => {
+  R(1, 0, 76, 48, 20); R(0, 1, 77, 46, 19); R(2, 4, 80, 9, 1); R(2, 28, 84, 12, 1); R(2, 16, 90, 7, 1);
+  const wy = f ? 42 : 48, wr = f ? 24 : 19, lx = f ? 7 : 11, rx = f ? 41 : 37;
+  OE(1, lx, wy, 7, wr, 0); OE(1, rx, wy, 7, wr, 0);
+  for (let i = 0; i < 5; i++) { R(2, lx - 4, wy - 10 + i * 6, 6, 1); R(2, rx - 1, wy - 10 + i * 6, 6, 1); }
+  R(1, 17, 62, 14, 13); R(2, 19, 70, 2, 5); R(2, 23, 71, 2, 5); R(2, 27, 70, 2, 5);
+  OE(1, 24, 47, 11, 19, 0);
+  for (let i = 0; i < 4; i++) { R(2, 19 + (i % 2), 38 + i * 6, 4, 1); R(2, 25 - (i % 2), 38 + i * 6, 4, 1); R(2, 23, 39 + i * 6, 2, 1); }
+  R(3, 16, 70, 4, 6); R(3, 28, 70, 4, 6); R(3, 14, 75, 7, 1); R(3, 27, 75, 7, 1);
+  OE(0, 24, 20, 9, 9, 1); R(1, 22, 14, 11, 2); R(1, 30, 16, 2, 1);
+  R(3, 27, 17, 3, 3); R(1, 28, 18, 1, 1);
+  R(3, 33, 18, 6, 4); R(3, 37, 22, 3, 3); R(3, 38, 25, 1, 1); R(1, 33, 21, 4, 1);
+});
+// UFO（64x24）：ラスボス。円盤の下から地面まで光線を出す
+const UFO = f => canv(64, 24, (R, E, OE) => {
+  OE(0, 32, 9, 11, 8); R(1, 27, 5, 3, 3);
+  OE(2, 32, 16, 30, 5);
+  R(1, 3, 16, 58, 2);
+  for (let i = 0; i < 6; i++) R((i + f) % 2 ? 3 : 0, 7 + i * 10, 16, 2, 2);
+  R(1, 20, 21, 24, 3); R(2, 22, 21, 20, 1);
+});
+const mkFrames = g => { const fr = [g(0), g(1)]; return { fr, sil: fr.map(i => silhouette(i, 3)) }; };
+const BOSSES = [
+  { name: 'QUEEN BEE', ...mkFrames(QUEEN), fps: 10, hp: 8, hb: [3, 2, 38, 88], minion: 'hornet', max: 2 },
+  { name: 'ROCK GOLEM', ...mkFrames(GOLEM), fps: 3, hp: 8, hb: [1, 2, 46, 86], core: [14, 21, 21, 35], minion: 'rockB', max: 2 },
+  { name: 'GIANT FROG', ...mkFrames(FROGB), fps: 2, hp: 8, hb: [1, 12, 44, 68], minion: 'frogN', max: 2 },
+  { name: 'STORM EAGLE', ...mkFrames(EAGLE), fps: 2, hp: 8, hb: [2, 10, 44, 86], minion: 'owlN', max: 2 },
+  { name: 'THE UFO', ...mkFrames(UFO), fps: 4, hp: 10, hb: [2, 1, 60, 22], ufo: true, max: 1 },
+];
+// 空に浮かぶ遠くのUFO（フェーズ1からだんだん近づく）
+const SKY_UFO = spr(['...222...', '..20002..', '222222222', '.2.2.2.2.']);
+let state = 'title', paused = false;
+let ptime = 0;                  // フェーズ進行用のプレイ時間（ボス戦中は止まる）
+let boss = null, bossDone = 0, bossMsg = '', bossSub = '', bossMsgT = 0;
+let lastUnique = 0, bannerSub = '', comboCool = 0, combo = 0, dist, bonus, phase, speedMul, lives, inv, ents, bullets, fx, parts, rings, pops, nextSpawn, banner, shake, hitstop, overT, bgScroll = 0, titleT = 0;
+const TITLE_BTN = {
+  start: { x: (W - 130) / 2, y: 60, w: 130, h: 20 },
+  howto: { x: (W - 130) / 2, y: 88, w: 130, h: 20 },
+};
+const EXIT_BTN = { x: W - 40, y: 4, w: 36, h: 12 };
+const p = { x: 40, y: GROUND - PH, w: 12, h: PH, vy: 0, onGround: true, airJump: true, jumpHold: false, coyote: 0, anim: 0 };
+let held = false, pressBuf = 0;
+
+function reset() {
+  lastUnique = 0; comboCool = 1500; combo = 0; dist = 0; bonus = 0; phase = 1; speedMul = 1; lives = 3; inv = 0; ents = []; bullets = []; fx = []; parts = []; rings = []; pops = [];
+  nextSpawn = 260; banner = 0; shake = 0; hitstop = 0; overT = 0;
+  boss = null; bossDone = 0; bossMsgT = 0; ptime = 0;
+  Object.assign(p, { y: GROUND - PH, vy: 0, onGround: true, airJump: true, jumpHold: false, coyote: 0 });
+  palFrom = palTo = DAY; palT = 0; nightShown = false;
+  curTheme = 0; themeStart.fill(bgScroll); bannerSub = THEMES[0].name;
+}
+function start() { reset(); state = 'play'; banner = 2.0; SFX.start(); }
+const score = () => Math.floor(dist / 10) + bonus;
+const rand = (a, b) => a + Math.random() * (b - a);
+
+function mk(type, alt = 0, dx = 0) {
+  const T = TYPES[type], f = T.frames[0];
+  const baseY = Math.max(ENEMY_TOP + 5, GROUND - alt - f.height);
+  const e = { type, T, x: W + 8 + dx, y: baseY, baseY, w: f.width, h: f.height, t: Math.random() * 3, jolt: 0 };
+  ents.push(e); return e;
+}
+function jumpDist() { const k = Math.pow(speedMul, 0.8); return BASE_SPEED * speedMul * 0.74 / k; }
+function mkBed(dx = 0, long = false) {
+  // トゲ床：通常は大ジャンプ、ロングは二段ジャンプが必要
+  const d = jumpDist();
+  const n = long ? Math.max(8, Math.round(d * rand(1.1, 1.35) / 15)) : Math.max(3, Math.min(7, Math.round(d * rand(0.5, 0.68) / 15)));
+  const e = mk('bed', 0, dx); e.tiles = n; e.w = n * 15; return e;
+}
+// 踏み跳ね後、次の敵の上面(高さ差dh)に落ちてくるまでの時間（速度1倍基準）
+function bounceTime(dh) {
+  const H = BOUNCE * BOUNCE / (2 * G_HOLD);
+  return BOUNCE / G_HOLD + Math.sqrt(2 * Math.max(0, H - dh) / G_FALL);
+}
+function formation(type, alts, dx0 = 0) {
+  const sp = speedMul / Math.pow(speedMul, 0.8);
+  let x = dx0; const out = [];
+  alts.forEach((a, i) => {
+    if (i > 0) x += BASE_SPEED * sp * bounceTime(a - alts[i - 1]);
+    const e = mk(type, a, x); e.still = true; e.vxo = 0; out.push(e);
+  });
+  return out;
+}
+// 固有敵を種類ごとの高さで出す
+function mkU(U) {
+  if (U.startsWith('ghost')) { const a = GHOST_ALTS(); return mk(U, a[Math.floor(Math.random() * 3)]); }
+  if (U.startsWith('owl')) return mk(U, rand(62, 72));
+  if (U === 'bee') return mk(U, rand(28, 48));
+  if (U === 'hornet') return mk(U, rand(34, 46));
+  return mk(U);
+}
+function spawn() {
+  const opts = [];
+  const add = (w, f) => { if (w > 0) opts.push([w, f]); };
+  const before = ents.length;
+  const sp = speedMul / Math.pow(speedMul, 0.8);   // 横移動量の速度補正
+  // 単体（地上と空中を縦に重ねない）
+  add(3, () => mk('spike'));
+  add(3, () => mk('slime'));
+  add(2.5, () => mk('bat', rand(18, 80)));
+  add(1.0, () => mkBed());
+  add(0.8, () => mk('wall'));
+  // このセットの固有敵（昼=通常 / 夜=変異版）
+  const U = UNIQUE[Math.floor((phase - 1) / 2) % 5][phase % 2 === 0 ? 1 : 0];
+  const spawnU = () => { lastUnique = dist; mkU(U); };
+  add(3.2, spawnU);
+  if (phase >= 2) {
+    add(2.0, () => mk('spirit', [rand(3, 8), rand(26, 50), rand(60, 80)][Math.floor(Math.random() * 3)]));
+    add(1.3, () => mk('tall'));
+    add(0.7, () => mkBed(0, true));                               // ロングトゲ床
+    add(1.0, () => { mk('slime'); mk('slime', 0, 60 * sp); });    // 横に十分離した2体
+  }
+  if (phase >= 3) {
+    add(0.9, () => { mk('spirit', rand(30, 50)); mk('spike', 0, 70 * sp); });
+    add(0.7, () => { mk('spirit', rand(3, 8)); mk('spirit', rand(62, 80), 50 * sp); });
+  }
+  // コンボ配置（レア）：踏み跳ねの軌道に合わせて間隔を計算。出現後しばらくは出ない
+  let isFormation = false;
+  const addF = (w, f) => add(dist >= comboCool ? w : 0, () => { isFormation = true; f(); });
+  // 軽め（2〜3コンボ）
+  addF(0.22, () => formation('slime', [0, 0]));                   // スライム2体
+  addF(0.22, () => formation('bat', [24, 24]));                   // コウモリ2体
+  addF(0.18, () => { formation('slime', [0]); formation('bat', [12], BASE_SPEED * sp * bounceTime(12 + 8 - 9)); }); // スライム→コウモリ
+  addF(0.12, () => formation('bat', [16, 28, 40]));               // 小階段
+  // 重め（4コンボ）
+  addF(0.07, () => formation('bat', [14, 26, 38, 50]));           // 上り階段
+  addF(0.05, () => formation('bat', [50, 38, 26, 14]));           // 下り階段
+  addF(0.06, () => formation('slime', [0, 0, 0, 0]));             // スライム行列
+  if (phase >= 2) addF(0.06, () => {                              // トゲ床上の踏み石
+    const es = formation('bat', [26, 26, 26], 30);
+    const last = es[es.length - 1];
+    const b = mkBed(0); b.tiles = Math.ceil((last.x - W + 60) / 15); b.w = b.tiles * 15;
+  });
+  // 固有敵の最低保証：一定時間（約4.5秒）出ていなければ、コンボ配置以外の抽選を固有敵に置き換える
+  const pity = dist - lastUnique > BASE_SPEED * speedMul * 4.5;
+  let tot = opts.reduce((a, o) => a + o[0], 0), r = Math.random() * tot;
+  if (pity) spawnU();
+  else for (const [w, f] of opts) { if ((r -= w) <= 0) { f(); break; } }
+  let extra = 0;
+  for (let i = before; i < ents.length; i++) extra = Math.max(extra, ents[i].x + ents[i].w - W);
+  const gMin = Math.max(0.55, 0.85 - 0.05 * (phase - 1));
+  if (isFormation) {
+    comboCool = dist + BASE_SPEED * speedMul * 14;                 // 次のコンボ配置まで約14秒
+    nextSpawn = dist + extra + BASE_SPEED * speedMul * rand(0.35, 0.55);
+  } else nextSpawn = dist + extra + BASE_SPEED * speedMul * rand(gMin, gMin + 0.6);
+}
+function hitbox(e) { const b = e.T.hb; return { x: e.x + b[0], y: e.y + b[1], w: e.tiles ? e.tiles * 15 - 2 : b[2], h: b[3] }; }
+const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+function kill(e, pts, stop = 0.06) {
+  e.dead = true; SFX.kill();
+  if (e.T.split) {                       // キノコ：小キノコに分裂
+    const k = Math.pow(speedMul, 0.8), vx = [-60, 45, -5];
+    for (let i = 0; i < e.T.split; i++) {
+      const m = mk(e.T.child, 0, 0);
+      m.x = e.x + 2 + i * 3; m.y = e.y + 4; m.vy = -(170 + i * 35) * k; m.onG = false; m.vxo = vx[i]; m.grace = 0.25;
+    }
+  }
+  const cx = e.x + e.w / 2, cy = e.y + e.h / 2;
+  fx.push({ x: cx - 12, y: cy - 12, t: 0 });
+  rings.push({ x: cx, y: cy, t: 0, max: 22, c: 3 }, { x: cx, y: cy, t: -0.08, max: 30, c: 1 });
+  for (let i = 0; i < 16; i++) {
+    const a = Math.random() * Math.PI * 2, v = rand(60, 170);
+    parts.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 60, s: Math.random() < 0.4 ? 3 : 2, c: [1, 3, 3, 2][i % 4], life: rand(0.4, 0.75), t: 0 });
+  }
+  // コンボ：着地せずに連続撃破で倍率アップ
+  combo++;
+  const mult = Math.min(combo, 8), got = pts * mult;
+  pops.push({ x: cx, y: e.y - 4, t: 0, txt: '+' + got });
+  if (combo >= 2) {
+    pops.push({ x: cx, y: e.y - 12, t: 0, txt: 'COMBO X' + mult, c: 1 });
+    tone(660 + combo * 110, 880 + combo * 110, 0.08, 'square', 0.06, 0.05);
+  }
+  bonus += got; shake = Math.max(shake, 0.12); hitstop = Math.max(hitstop, stop);
+}
+function spikeBounce(e, k) {
+  // 踏めない敵・トゲの上に乗った：弾かれてダメージ
+  p.vy = -BOUNCE * 1.1 * k; p.onGround = false; p.jumpHold = false;
+  e.jolt = 0.25; SFX.clang();
+  fx.push({ x: p.x + p.w / 2 - 12, y: p.y + p.h - 12, t: 0, clang: true });
+  for (let i = 0; i < 6; i++) parts.push({ x: p.x + p.w / 2, y: p.y + p.h, vx: rand(-90, 90), vy: rand(-140, -40), s: 2, c: 1, life: 0.35, t: 0 });
+  if (inv <= 0) { if (state === 'howto') inv = 0.6; else hurt(); }
+}
+function hurt() {
+  combo = 0; lives--; inv = 1.4; shake = 0.25; SFX.hit();
+  if (lives <= 0) {
+    state = 'over'; overT = 0; SFX.over();
+    if (score() > hi) { hi = score(); saveHi(); }
+  }
+}
+// ----- ボス進行 -----
+// 夜フェーズの終わり（背景の入れ替え演出より手前）で出現し、倒すまで距離は進まない
+const bossAt = () => phase * PHASE_T - SWAP_T - 0.3;
+const bossPending = () => state === 'play' && phase % 2 === 0 && bossDone < phase;
+function startBoss() {
+  const id = Math.floor((phase - 1) / 2) % 5, B = BOSSES[id], img = B.fr[0];
+  boss = { id, B, w: img.width, h: img.height, x: W + 6, y: GROUND - img.height, tx: W - img.width - 4, st: 'enter', t: 0, hp: B.hp, flash: 0, sum: 1.2, dieT: 0, boomT: 0 };
+  if (B.ufo) { boss.x = boss.tx; boss.y = -30; boss.ty = 56; }
+  bossMsg = 'WARNING'; bossSub = B.name; bossMsgT = 2.4; SFX.warn();
+}
+function beamBox() { const cx = boss.x + 32; return { x: cx - 10, y: boss.y + 22, w: 20, h: GROUND - (boss.y + 22) }; }
+function summon() {
+  const b = boss, U = b.B.ufo ? UNIQUE[Math.floor(Math.random() * 5)][1] : b.B.minion;
+  const e = mkU(U); e.minion = true;
+  e.x = b.B.ufo ? b.x + 32 - e.w / 2 : b.x + 2;
+  rings.push({ x: e.x + e.w / 2, y: e.y + e.h / 2, t: 0, max: 14, c: 3 });
+  tone(300, 600, 0.1, 'square', 0.04);
+}
+function updBoss(dt, k) {
+  const b = boss; b.t += dt; if (b.flash > 0) b.flash -= dt;
+  if (b.st === 'enter') {
+    if (b.B.ufo) { b.y += (b.ty - b.y) * Math.min(1, dt * 2.5); if (b.ty - b.y < 0.5) { b.y = b.ty; b.st = 'fight'; } }
+    else { b.x -= 70 * dt; if (b.x <= b.tx) { b.x = b.tx; b.st = 'fight'; } }
+  } else if (b.st === 'fight') {
+    b.sum -= dt;
+    const alive = ents.filter(e => e.minion && !e.dead).length;
+    if (b.sum <= 0 && alive < b.B.max) { summon(); b.sum = rand(2.0, 2.8) / k; }
+  } else if (b.st === 'die') {
+    b.dieT += dt; b.boomT -= dt;
+    if (b.boomT <= 0) {
+      b.boomT = 0.09;
+      const x = b.x + rand(4, b.w - 4), y = b.y + rand(4, b.h - 4);
+      fx.push({ x: x - 12, y: y - 12, t: 0 }); rings.push({ x, y, t: 0, max: 16, c: Math.random() < 0.5 ? 3 : 1 });
+      noise(0.1, 0.05); shake = Math.max(shake, 0.1);
+    }
+    if (b.dieT > 1.5) finishBoss();
+  }
+}
+function hitBoss(bl, bb) {
+  const b = boss, B = b.B, box = h => ({ x: b.x + h[0], y: b.y + h[1], w: h[2], h: h[3] });
+  let weak;
+  if (B.core) {
+    const c = box(B.core);
+    if (overlap(bb, c)) weak = true;
+    else if (overlap(bb, box(B.hb))) { if (bb.y < c.y + c.h && bb.y + bb.h > c.y) return; weak = false; } // 核の高さの弾は核まで届く
+    else return;
+  } else if (overlap(bb, box(B.hb)) || (B.ufo && overlap(bb, beamBox()))) weak = true;
+  else return;
+  bl.dead = true;
+  if (!weak) {                                   // 岩の体：弾かれる
+    SFX.clang(); hitstop = Math.max(hitstop, 0.04); fx.push({ x: bl.x - 6, y: bl.y - 10, t: 0, clang: true }); return;
+  }
+  b.hp--; b.flash = 0.14; bonus += 100; SFX.bossHit(); hitstop = Math.max(hitstop, 0.05); shake = Math.max(shake, 0.08);
+  pops.push({ x: bl.x + 4, y: bl.y - 6, t: 0, txt: '+100' });
+  for (let i = 0; i < 8; i++) { const a = Math.random() * Math.PI * 2, v = rand(50, 130); parts.push({ x: bl.x + 8, y: bl.y + 2, vx: Math.cos(a) * v - 40, vy: Math.sin(a) * v - 40, s: 2, c: [1, 3][i % 2], life: rand(0.25, 0.45), t: 0 }); }
+  if (b.hp <= 0) {
+    b.st = 'die'; b.dieT = 0; SFX.boom(); shake = 0.4;
+    for (const e of ents) if (e.minion && !e.dead) { e.dead = true; fx.push({ x: e.x + e.w / 2 - 12, y: e.y + e.h / 2 - 12, t: 0 }); }
+  }
+}
+function finishBoss() {
+  const pts = boss.B.ufo ? 10000 : 5000;
+  bonus += pts; bossDone = phase; boss = null;
+  pops.push({ x: W / 2 + 40, y: 96, t: 0, txt: '+' + pts });
+  if (lives < 3) { lives++; pops.push({ x: p.x + 6, y: p.y - 12, t: 0, txt: '+1 LIFE', c: 3 }); }
+  bossMsg = 'BOSS CLEAR!'; bossSub = ''; bossMsgT = 2.0; SFX.clear();
+  lastUnique = dist; nextSpawn = dist + BASE_SPEED * speedMul * 1.2;
+}
+function setNight(n) { palFrom = nightShown ? NIGHT : DAY; palTo = n ? NIGHT : DAY; palT = 0.001; }
+
+// ===== 遊び方（実際にプレイヤーを操作させるインタラクティブなチュートリアル） =====
+// 通常プレイと全く同じ物理・入力・ジャンプ・射撃コードを使い、進行だけを誘導する
+let tut = null;
+function initHowto() {
+  reset();
+  Object.assign(p, { x: 40, y: GROUND - PH });
+  tut = { step: 'walk', walkT: 0, airT: 0, jump: false, double: false, stomp: false, doneT: 0, landSlime: null };
+  state = 'howto';
+}
+function howtoHint() {
+  if (!tut) return '';
+  if (tut.step === 'gate1') return 'TAP TO JUMP!';
+  if (tut.step === 'gate2') return 'TAP AGAIN TO DOUBLE JUMP + SHOOT!';
+  if (tut.step === 'landed') return 'NICE!';
+  return '';
+}
+
+// ===== 入力 =====
+function press() {
+  initAudio();
+  if (state === 'title') { start(); return; }
+  if (state === 'over') { if (overT > 0.7) start(); return; }
+  if (paused) { paused = false; return; }
+  if (state === 'howto' && tut) {
+    if (tut.step === 'gate1') { tut.step = 'air1'; tut.airT = 0; }
+    else if (tut.step === 'gate2') { tut.step = 'air2'; }
+    else if (tut.step !== 'walk' && tut.step !== 'air1' && tut.step !== 'air2') return; // landed/done中は反応しない
+  }
+  held = true; pressBuf = 0.12;
+}
+function exitHowto() { state = 'title'; tut = null; }
+function release() { held = false; p.jumpHold = false; }
+const JUMP_KEYS = ['Space', 'ArrowUp', 'KeyW', 'KeyZ', 'Enter'];
+const inRect = (pt, r) => pt.x >= r.x && pt.x <= r.x + r.w && pt.y >= r.y && pt.y <= r.y + r.h;
+function ptToCanvas(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
+}
+addEventListener('keydown', e => {
+  if (JUMP_KEYS.includes(e.code)) { e.preventDefault(); if (!e.repeat) press(); }
+  else if (e.code === 'Escape' && state === 'howto') exitHowto();
+  else if (e.code === 'KeyP' && state === 'play') paused = !paused;
+  else if (e.code === 'KeyM') muted = !muted;
+});
+addEventListener('keyup', e => { if (JUMP_KEYS.includes(e.code)) release(); });
+addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (state === 'title') {
+    initAudio();
+    const pt = ptToCanvas(e);
+    if (inRect(pt, TITLE_BTN.howto)) { initHowto(); return; }
+    if (inRect(pt, TITLE_BTN.start)) { start(); return; }
+    return;
+  }
+  if (state === 'howto' && inRect(ptToCanvas(e), EXIT_BTN)) { exitHowto(); return; }
+  press();
+});
+addEventListener('pointerup', release);
+addEventListener('pointercancel', release);
+addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'play') paused = true; });
+
+// ===== 更新 =====
+function updateFx(dt, speed) {
+  for (const f of fx) f.t += dt;
+  fx = fx.filter(f => f.t < (f.clang ? 0.2 : 0.36));
+  for (const r of rings) r.t += dt;
+  rings = rings.filter(r => r.t < 0.3);
+  for (const q of parts) { q.t += dt; if (!q.noG) q.vy += 420 * dt; q.x += (q.vx - speed * 0.5) * dt; q.y += q.vy * dt; }
+  parts = parts.filter(q => q.t < q.life && q.y < GROUND + 2);
+  for (const q of pops) { q.t += dt; q.y -= 22 * dt; }
+  pops = pops.filter(q => q.t < 0.9);
+}
+function update(dt) {
+  if (palT > 0) { palT += dt / 1.2; if (palT >= 0.5) nightShown = palTo === NIGHT; if (palT >= 1) { palFrom = palTo; palT = 0; } }
+  if (state === 'title') { titleT += dt; bgScroll += BASE_SPEED * 0.6 * dt; p.anim += dt * 10; return; }
+  if (state === 'over') { overT += dt; updateFx(dt, 0); return; }
+  if (hitstop > 0) { hitstop -= dt; return; }
+  const tutorial = state === 'howto';
+  if (tutorial && (tut.step === 'gate1' || tut.step === 'gate2')) return; // 入力待ちで一時停止
+
+  const speed = BASE_SPEED * speedMul;
+  // ボス戦中（と出現直前）は距離を止める。背景のスクロールは続ける
+  dist += speed * dt; bgScroll += speed * dt;
+  // フェーズ進行は時間制。ボス戦中（と出現直前）は時間を止める
+  if (!tutorial && !boss && !(bossPending() && ptime >= bossAt())) ptime += dt;
+  if (!boss && bossPending() && ptime >= bossAt()) { ptime = bossAt(); startBoss(); }
+  if (bossMsgT > 0) bossMsgT -= dt;
+  if (!tutorial) {
+    const np = 1 + Math.floor(ptime / PHASE_T);
+    if (np > phase) {
+      phase = np;
+      speedMul = phase <= 11 ? 1 + 0.15 * (phase - 1) : Math.min(3.0, 2.5 + 0.05 * (phase - 11));
+      banner = 2.4; SFX.phase(); setNight(phase % 2 === 0);
+      lastUnique = dist - BASE_SPEED * speedMul * 3.0;
+      if (phase % 2 === 1) {               // 新しいセット＝新エリア
+        curTheme = Math.floor((phase - 1) / 2) % 5; themeStart[curTheme] = bgScroll;
+        bannerSub = THEMES[curTheme].name;
+      } else bannerSub = 'NIGHT FALLS';
+    }
+    if (banner > 0) banner -= dt;
+  }
+  if (inv > 0) inv -= dt;
+  if (shake > 0) shake -= dt;
+
+  // プレイヤー
+  const k = Math.pow(speedMul, 0.8);
+  const prevBottom = p.y + p.h;
+  if (pressBuf > 0) {
+    pressBuf -= dt;
+    if (p.onGround || p.coyote > 0) {
+      p.bouncing = false; p.vy = -JUMP * k; p.onGround = false; p.coyote = 0; pressBuf = 0; p.jumpHold = held; SFX.jump();
+      if (tutorial) tut.jump = true;
+    } else if (p.airJump) {
+      p.airJump = false; p.bouncing = false; p.vy = -JUMP2 * k; pressBuf = 0; p.jumpHold = held; SFX.dj();
+      bullets.push({ x: p.x + 10, y: p.y + 4, t: 0, trail: 0 });
+      rings.push({ x: p.x + 14, y: p.y + 6, t: 0.12, max: 10, c: 3 });
+      if (tutorial) tut.double = true;
+    }
+  }
+  if (p.coyote > 0) p.coyote -= dt;
+  if (!p.onGround) {
+    const g = p.vy < 0 ? ((tutorial || p.bouncing || (p.jumpHold && held)) ? G_HOLD : G_CUT) : G_FALL;
+    if (p.vy >= 0) p.bouncing = false;
+    p.vy = Math.min(p.vy + g * k * k * dt, MAX_FALL * k);
+    p.y += p.vy * dt;
+    if (p.y < TOP_LIMIT) { p.y = TOP_LIMIT; if (p.vy < 0) p.vy = 0; }
+    if (p.y >= GROUND - p.h) { p.y = GROUND - p.h; p.vy = 0; p.onGround = true; p.airJump = true; p.jumpHold = false; p.bouncing = false; combo = 0; }
+  }
+  p.anim += dt * (8 + speedMul * 4);
+
+  // 敵
+  for (const e of ents) {
+    e.t += dt; if (e.jolt > 0) e.jolt -= dt;
+    e.x -= (speed + (e.vxo ?? e.T.vx)) * dt;
+    if (e.grace > 0) e.grace -= dt;
+    if (e.T.upd) e.T.upd(e, dt, k, speed);
+    else if (e.still) {}
+    else if (e.type === 'bat') e.y = e.baseY + Math.round(Math.sin(e.t * 4) * 5);
+    else if (e.type === 'spirit') e.y = e.baseY + Math.round(Math.sin(e.t * 3) * 3);
+    if (e.y < ENEMY_TOP) e.y = ENEMY_TOP;
+  }
+  if (boss) updBoss(dt, k);
+  // 弾丸
+  for (const b of bullets) {
+    b.x += 360 * dt; b.t += dt; b.trail += dt;
+    if (b.trail > 0.025) { b.trail = 0; parts.push({ x: b.x, y: b.y + 1 + Math.floor(Math.random() * 3), vx: -40, vy: -300 * 0, s: 1, c: 3, life: 0.18, t: 0, noG: true }); }
+    const bb = { x: b.x + 2, y: b.y, w: 10, h: 5 };
+    for (const e of ents) {
+      if (e.dead || b.dead || e.hidden || !overlap(bb, hitbox(e))) continue;
+      b.dead = true;
+      if (!e.T.solid) kill(e, BONUS_SHOT, 0.1);
+      else { e.jolt = 0.15; SFX.clang(); hitstop = Math.max(hitstop, 0.04); fx.push({ x: b.x - 6, y: b.y - 10, t: 0, clang: true }); }
+    }
+    if (!b.dead && boss && boss.st === 'fight') hitBoss(b, bb);
+    if (b.x > W) b.dead = true;
+  }
+  // 接触判定
+  const pb = { x: p.x + 2, y: p.y + 1, w: p.w - 4, h: p.h - 1 };
+  for (const e of ents) {
+    if (e.dead || e.hidden) continue;
+    const hb = hitbox(e);
+    const fromAbove = p.vy > 0 && prevBottom <= hb.y + 6;
+    // 踏みつけ判定は横に少し広め（コンボをつなぎやすく）
+    if (fromAbove && e.T.stomp && overlap(pb, { x: hb.x - 4, y: hb.y, w: hb.w + 8, h: hb.h })) {
+      kill(e, BONUS_STOMP); SFX.stomp();
+      p.vy = -BOUNCE * k; p.airJump = true; p.jumpHold = held; p.onGround = false; p.bouncing = true;
+      if (tutorial) tut.stomp = true;
+      continue;
+    }
+    if (!overlap(pb, hb)) continue;
+    if (e.grace > 0) continue;
+    e.touched = true;
+    if (fromAbove && !e.T.stomp) { spikeBounce(e, k); if (state !== 'play') break; }
+    else if (inv <= 0) { if (tutorial) inv = 0.6; else { hurt(); if (state !== 'play') break; } }
+  }
+  // よけ系を無傷で越えたら褒める
+  for (const e of ents) {
+    if (e.dead || e.praised || e.T.stomp || e.x + (e.tiles ? e.tiles * 15 : e.w) >= p.x) continue;
+    e.praised = true;
+    if (e.touched) continue;
+    const big = e.type === 'wall' || (e.type === 'bed' && e.tiles >= 8);
+    const word = big ? 'GREAT!' : ['NICE!', 'GOOD!', 'COOL!'][Math.floor(Math.random() * 3)];
+    pops.push({ x: p.x + 6, y: p.y - 10, t: 0, txt: word, c: 1 });
+    pops.push({ x: p.x + 6, y: p.y - 2, t: 0, txt: big ? '+100' : '+50', c: 3 });
+    bonus += big ? 100 : 50;
+    tone(big ? 1175 : 988, big ? 1175 : 988, 0.05, 'square', 0.05); tone(big ? 1568 : 1319, big ? 1568 : 1319, 0.08, 'square', 0.05, 0.05);
+  }
+  ents = ents.filter(e => !e.dead && e.x + (e.w || 0) > -8);
+  bullets = bullets.filter(b => !b.dead);
+  updateFx(dt, speed);
+
+  if (tutorial) {
+    if (tut.step === 'walk') {
+      tut.walkT += dt;
+      if (tut.walkT > 0.5) tut.step = 'gate1';
+    } else if (tut.step === 'air1') {
+      tut.airT += dt;
+      if (tut.airT > 0.18) {
+        tut.step = 'gate2';
+        // 遠く（弾でしか倒せない）の敵と、着地点で待つ敵を配置
+        const sp = mk('spirit', 0, 0); sp.x = p.x + 140; sp.y = sp.baseY = p.y; sp.t = 0;
+        const sl = mk('slime', 0, 0); sl.x = p.x - 1;
+        tut.landSlime = sl;
+      }
+    } else if (tut.step === 'air2') {
+      if (tut.landSlime && !tut.landSlime.dead) tut.landSlime.x = p.x - 1;
+      if (p.onGround) tut.step = 'landed';
+    } else if (tut.step === 'landed') {
+      tut.doneT += dt;
+      if (tut.doneT > 1.0) { state = 'title'; tut = null; }
+    }
+    return;
+  }
+  // ボス出現の約2秒前から通常の敵は出さない（画面を空けてから登場）
+  if (boss || (bossPending() && ptime >= bossAt() - 2.0)) return;
+  if (ents.length === 0 && nextSpawn - dist > speed * 0.5) nextSpawn = dist + speed * 0.3;
+  if (dist >= nextSpawn) spawn();
+}
+
+// ===== 描画 =====
+function drawScene() {
+  // 空
+  ctx.fillStyle = IDX[0]; ctx.fillRect(0, 0, W, H);
+  const t = performance.now() / 1000;
+  if (nightShown) {
+    ctx.fillStyle = IDX[1];
+    const off = Math.floor(bgScroll * 0.03);
+    for (const s of stars) {
+      const x = ((s.x - off) % LW + LW) % LW; if (x >= W) continue;
+      if (s.big && Math.sin(t * 2 + s.ph) > 0) { ctx.fillRect(x - 1, s.y, 3, 1); ctx.fillRect(x, s.y - 1, 1, 3); }
+      else if (Math.sin(t * 1.5 + s.ph) > -0.7) ctx.fillRect(x, s.y, 1, 1);
+    }
+    disc(250, 50, 9, 1); disc(255, 47, 8, 0);
+  } else {
+    disc(250, 50, 10, 3);
+  }
+  // 遠くのUFO：フェーズ1からうっすら見え、フェーズ10に向けて大きく・低くなる
+  if ((state === 'play' || state === 'over') && phase <= 10 && bossDone < 10 && !(boss && boss.B.ufo)) {
+    const pr = Math.max(0, Math.min(1, (ptime / PHASE_T) / 9.6));
+    const sc = 1 + Math.floor(pr * 3.99), ux = Math.round(78 - pr * 28), uy = Math.round(30 + pr * 6 + Math.sin(t * 1.3) * (sc > 2 ? 2 : 1));
+    ctx.drawImage(SKY_UFO, ux, uy, SKY_UFO.width * sc, SKY_UFO.height * sc);
+    if (sc >= 3 && Math.floor(t * 3) % 2) { ctx.fillStyle = IDX[3]; ctx.fillRect(ux + 4 * sc, uy + 3 * sc, sc, sc); }
+  }
+  // 遠景・中景。セットの終わりに「中景（木など）→遠景」の順で沈み、次のセットは「遠景→中景」の順でせり上がる
+  const SET_LEN = PHASE_T * 2, TZ = SWAP_T;
+  const clamp01 = v => Math.max(0, Math.min(1, v)), ease = v => v * v * (3 - 2 * v);
+  const d = (state === 'title' || state === 'howto') ? 0 : ptime, pos = d % SET_LEN, th = Math.floor(d / SET_LEN) % 5;
+  let farOff = 0, midOff = 0;
+  if (state !== 'title' && state !== 'howto' && pos > SET_LEN - TZ) {
+    const v = (pos - (SET_LEN - TZ)) / TZ;
+    midOff = ease(clamp01(v / 0.4)) * 23; farOff = ease(clamp01((v - 0.4) / 0.6)) * 91;
+  } else if (state !== 'title' && state !== 'howto' && d >= SET_LEN && pos < TZ) {
+    const u = pos / TZ;
+    farOff = (1 - ease(clamp01(u / 0.6))) * 91; midOff = (1 - ease(clamp01((u - 0.6) / 0.4))) * 23;
+  }
+  {
+    const L = THEMES[th], mo = Math.floor((bgScroll - themeStart[th]) * 0.05) % LW, fo = Math.floor(bgScroll * 0.3) % LW;
+    const fy = GROUND - 90 + Math.round(farOff), my = GROUND - 22 + Math.round(midOff);
+    if (farOff < 90) { ctx.drawImage(L.far, -mo, fy); ctx.drawImage(L.far, LW - mo, fy); }
+    if (midOff < 22) { ctx.drawImage(L.mid, -fo, my); ctx.drawImage(L.mid, LW - fo, my); }
+  }
+  // 地面
+  ctx.fillStyle = IDX[1]; ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = IDX[0];
+  const go = Math.floor(bgScroll) % LW;
+  for (const s of specks) {
+    const x = ((s.x - go) % LW + LW) % LW;
+    if (x < W) ctx.fillRect(x, s.y, s.w, 1);
+  }
+}
+function drawPlayer() {
+  if (state === 'play' && inv > 0 && Math.floor(inv * 14) % 2) return;
+  let img;
+  if (state === 'over') img = S.fall;
+  else if (!p.onGround) img = p.vy < 0 ? S.up : S.fall;
+  else img = S.run[Math.floor(p.anim) % 4];
+  ctx.drawImage(img, Math.round(p.x), Math.round(p.y));
+}
+function ring(r) {
+  if (r.t < 0) return;
+  const rad = Math.round(4 + (r.max - 4) * Math.min(1, r.t / 0.3));
+  ctx.fillStyle = IDX[Math.floor(r.t * 30) % 2 ? 1 : r.c];
+  const n = Math.max(12, rad * 3);
+  for (let i = 0; i < n; i++) {
+    const a = i / n * Math.PI * 2;
+    ctx.fillRect(Math.round(r.x + Math.cos(a) * rad) - 1, Math.round(r.y + Math.sin(a) * rad) - 1, 2, 2);
+  }
+}
+function drawBoss() {
+  const b = boss, B = b.B;
+  if (b.st === 'die' && Math.floor(b.dieT * 16) % 2) return;
+  const bx = Math.round(b.x), by = Math.round(b.y);
+  if (B.ufo && b.st !== 'enter') {                 // 地面まで伸びる光線（ディザで半透明風）
+    const cx = bx + 32, top = by + 22, ph = Math.floor(b.t * 10);
+    ctx.fillStyle = IDX[1];
+    for (let y = top; y < GROUND; y++) {
+      const hw = 8 + Math.floor((y - top) * 0.09);
+      ctx.fillRect(cx - hw, y, 1, 1); ctx.fillRect(cx + hw, y, 1, 1);
+      for (let x = cx - hw + 1; x < cx + hw; x++) if (((x + y + ph) & 3) === 0) ctx.fillRect(x, y, 1, 1);
+    }
+  }
+  const i = Math.floor(b.t * B.fps) % 2, jx = b.flash > 0 ? (Math.floor(b.flash * 60) % 2 ? 2 : -2) : 0;
+  ctx.drawImage(b.flash > 0.07 ? B.sil[i] : B.fr[i], bx + jx, by);
+}
+function drawWorld() {
+  if (boss) drawBoss();
+  for (const e of ents) {
+    if (e.hidden) { if (Math.floor(e.t * 10) % 2) ctx.drawImage(S.ghostHint, Math.round(e.x), Math.round(e.y)); continue; }
+    const fr = e.T.frames, img = e.T.frameFn ? e.T.frameFn(e) : fr[e.T.fps ? Math.floor(e.t * e.T.fps) % fr.length : 0];
+    const jx = e.jolt > 0 ? (Math.floor(e.jolt * 40) % 2 ? 1 : -1) : 0;
+    for (let i = 0; i < (e.tiles || 1); i++) ctx.drawImage(img, Math.round(e.x) + jx + i * 15, Math.round(e.y) - (e.jolt > 0.15 ? 1 : 0));
+  }
+  for (const q of parts) { ctx.fillStyle = IDX[q.c]; ctx.fillRect(Math.round(q.x), Math.round(q.y), q.s, q.s); }
+  for (const b of bullets) { const bx = Math.round(b.x), by = Math.round(b.y); for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) ctx.drawImage(BULLET_O, bx + dx, by + dy); ctx.drawImage(S.bullet[Math.floor(b.t * 20) % 2], bx, by); }
+  for (const r of rings) ring(r);
+  for (const f of fx) {
+    if (f.clang) { ctx.drawImage(S.clang, Math.round(f.x) + 8, Math.round(f.y) + 8, 7 * (f.t < 0.1 ? 2 : 1), 7 * (f.t < 0.1 ? 2 : 1)); continue; }
+    ctx.drawImage(S.puff[Math.min(2, Math.floor(f.t / 0.12))], Math.round(f.x), Math.round(f.y), 24, 24);
+  }
+  drawPlayer();
+  for (const q of pops) if (q.t < 0.6 || Math.floor(q.t * 16) % 2) text(q.txt, Math.round(q.x), Math.round(q.y), q.c || 3, 1, 'center');
+}
+function drawHUD() {
+  for (let i = 0; i < 3; i++) ctx.drawImage(i < lives ? S.heart : S.heartE, 6 + i * 17, 6, 14, 12);
+  text('SCORE ' + String(score()).padStart(7, '0'), W - 6, 6, 1, 1, 'right');
+  text('HI ' + String(Math.max(hi, score())).padStart(7, '0'), W - 6, 14, 1, 1, 'right');
+  text('PHASE ' + phase, W / 2, 6, 1, 1, 'center');
+  if (combo >= 2) text('COMBO X' + Math.min(combo, 8), W / 2, 14, 3, 1, 'center');
+  if (boss && boss.st !== 'die') {                // ボスの体力ゲージ
+    const bw = 90, bx = Math.round(W / 2 - bw / 2), by = 32;
+    text(boss.B.name, W / 2, 24, 1, 1, 'center');
+    ctx.fillStyle = IDX[1]; ctx.fillRect(bx - 1, by - 1, bw + 2, 6);
+    ctx.fillStyle = IDX[0]; ctx.fillRect(bx, by, bw, 4);
+    ctx.fillStyle = IDX[3]; ctx.fillRect(bx, by, Math.round(bw * boss.hp / boss.B.hp), 4);
+  }
+  if (bossMsgT > 0 && Math.floor(bossMsgT * 6) % 2 === 0) {
+    text(bossMsg, W / 2, 50, 3, 3, 'center');
+    if (bossSub) text(bossSub, W / 2, 71, 1, 1, 'center');
+  }
+  if (banner > 0 && Math.floor(banner * 6) % 2 === 0) {
+    text('PHASE ' + phase, W / 2, 46, 3, 3, 'center');
+    text(bannerSub, W / 2, 67, 1, 1, 'center');
+    if (phase > 1) text('SPEED UP!', W / 2, 76, 1, 1, 'center');
+  }
+}
+function present() {
+  const img = ctx.getImageData(0, 0, W, H), d = new Uint32Array(img.data.buffer);
+  const A = palFrom, B = palTo, th = palT > 0 ? Math.floor(palT * 17) : 0;
+  for (let y = 0, i = 0; y < H; y++) {
+    const by = (y & 3) << 2;
+    for (let x = 0; x < W; x++, i++) { const c = d[i] & 3; d[i] = BAYER[by | (x & 3)] < th ? B[c] : A[c]; }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+function render() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = IDX[0]; ctx.fillRect(0, 0, W, H);
+  if (state !== 'title' && state !== 'howto' && shake > 0) ctx.translate(Math.round(rand(-2, 2)), Math.round(rand(-2, 2)));
+  drawScene();
+  if (state === 'title') {
+    drawPlayer();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    text('MONSTER DASH', W / 2, 30, 1, 3, 'center');
+    button(TITLE_BTN.start.x, TITLE_BTN.start.y, TITLE_BTN.start.w, TITLE_BTN.start.h, 'START');
+    button(TITLE_BTN.howto.x, TITLE_BTN.howto.y, TITLE_BTN.howto.w, TITLE_BTN.howto.h, 'HOW TO PLAY');
+    if (hi > 0) text('HI ' + String(hi).padStart(7, '0'), W / 2, 118, 1, 1, 'center');
+  } else if (state === 'howto') {
+    drawWorld();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (Math.floor(performance.now() / 450) % 2 === 0) text(howtoHint(), W / 2, 10, 3, 1, 'center');
+    button(EXIT_BTN.x, EXIT_BTN.y, EXIT_BTN.w, EXIT_BTN.h, 'EXIT');
+  } else {
+    drawWorld();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    drawHUD();
+    if (state === 'over') {
+      text('GAME OVER', W / 2, 48, 3, 3, 'center');
+      text('SCORE ' + score() + '   PHASE ' + phase, W / 2, 72, 1, 1, 'center');
+      if (score() >= hi && hi > 0) text('NEW RECORD!', W / 2, 82, 3, 1, 'center');
+      if (overT > 0.7 && Math.floor(overT * 2) % 2 === 0) text('PRESS TO RETRY', W / 2, 98, 1, 1, 'center');
+    } else if (paused) {
+      text('PAUSED', W / 2, 60, 1, 2, 'center');
+    }
+  }
+  present();
+}
+
+// ===== ループ =====
+let last = performance.now();
+function frame(now) {
+  const dt = Math.max(0, Math.min((now - last) / 1000, 1 / 30)); last = now;
+  if (!paused) update(dt);
+  bgmUpdate();
+  render();
+  requestAnimationFrame(frame);
+}
+function fit() {
+  const s = Math.min((innerWidth - 32) / W, (innerHeight - 70) / H);
+  const sc = s >= 1 ? Math.floor(s) : Math.max(s, 0.5);
+  cv.style.width = W * sc + 'px'; cv.style.height = H * sc + 'px';
+}
+addEventListener('resize', fit); fit();
+reset(); state = 'title';
+requestAnimationFrame(frame);
+window.__game = { dbg: () => ({ dist, nextSpawn, n: ents.length, speedMul, bgmStep, bgmKey, ac: AC && AC.state }), spawn: () => spawn(), setLives: v => { lives = v; }, mk: (...a) => mk(...a), formation: (...a) => formation(...a), kill: i => kill(ents[i], 300), get state() { return state; }, get phase() { return phase; }, get ents() { return ents; }, get tut() { return tut; }, get boss() { return boss; }, get bullets() { return bullets; }, BOSSES, bossAt, set phase(v) { phase = v; }, setSpeed: v => { speedMul = v; }, initHowto, exitHowto, TITLE_BTN, p, press, release, start, setDist: v => { dist = v; }, setTime: v => { ptime = v; }, set bossDone(v) { bossDone = v; }, get ptime() { return ptime; }, PHASE_T };
+})();
+</script>
+</body>
+</html>
