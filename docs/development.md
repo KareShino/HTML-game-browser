@@ -54,11 +54,15 @@ node --test tools/build.test.mjs
 
 - `path` / `thumbnail` は `dist/` からの相対パス（Pagesのサブパスでも動く）。`thumbnail` がなければ `null`。
 - ZIPは `index.html` が直下にあるか、単一の最上位フォルダ直下にあれば取り込める。
+- サムネイルは、フォルダ/ZIPなら中の `thumbnail.png`、なければ `games/<名前>.png`。単一HTMLは `games/<名前>.png` のみ。PNG以外・8MB超は警告して無視する。
+- `games/<名前>.json`（`meta.json` と同じ形式）は、中に `meta.json` がないゲームのタイトル・説明に使う。
+- タイトルは `<meta charset>` に従って復号する（Shift_JIS のHTMLも可）。
 
 ## ランチャー
 
 - 画面切り替えは URL ハッシュ（`#/` と `#/play/<id>`）。
 - テーマは `localStorage` の `launcher:theme`。`<html data-theme>` で切り替え、ゲーム側（iframe内）には影響しない。
+- ゲームが8個以上あると、サイドバーに検索欄（タイトル・説明で絞り込み）が出る。一覧の項目はキーボード（Tab / Enter）でも選べる。
 - 全画面はプレイ画面全体（`#stage`）に対して行う。全画面中は上部バーを隠し、画面上端12pxにマウスを寄せると表示。左上には薄い「一覧に戻る」ボタンを常時表示する。
 
 ## オフライン版
@@ -73,7 +77,7 @@ go build -o html-game-launcher .
 | フラグ | 既定 | 内容 |
 |---|---|---|
 | `-dist` | 実行ファイル隣の `dist` | 配信するフォルダ |
-| `-port` | 18080 | 優先ポート。使用中なら +1 ずつ20個、それも駄目ならOS任せ |
+| `-port` | 18080 | 優先ポート。使用中なら +1 ずつ20個、それも駄目ならOS任せ。ただし同じランチャーがすでにそのポートで動いている場合は、サーバーを増やさずブラウザだけ開いて終了する（レスポンスヘッダ `X-Html-Game-Launcher` で判定） |
 | `-no-browser` | false | ブラウザを自動で開かない |
 
 - `127.0.0.1` のみで待ち受ける。Hostヘッダが `127.0.0.1` / `localhost` 以外なら403。

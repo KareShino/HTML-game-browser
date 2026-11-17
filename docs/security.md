@@ -15,4 +15,5 @@
 
 - shimが分離するのは `localStorage` / `sessionStorage` のみ。IndexedDB・Cookie・Cache Storage は同一オリジンで共有される（キー名が衝突するゲームがあると影響しうる）。
 - 悪意あるゲームは同一オリジンのため、他のゲームのデータやランチャーのキーに到達できる。`games/` には信頼できるゲームだけを置く前提。
+- shimは `Storage` として振る舞う（`instanceof Storage` は真）が、`Storage.prototype.getItem.call(localStorage, ...)` のように prototype のメソッドを直接呼ぶコードは動かない。
 - shimは `<script>` を `<head>` 直後に挿入する。`window.localStorage` を先に退避してから上書きするゲームには効かない。

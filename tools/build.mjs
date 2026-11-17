@@ -214,23 +214,59 @@ function injectAll(dir, id, shimSource) {
 
 // ---------- メタ情報 ----------
 
+function decodeHtml(buf) {
+  // <meta charset> に従って復号する（Shift_JIS などで書かれたゲームのタイトルが化けないように）
+  const head = buf.subarray(0, 2048).toString("latin1");
+  const cs = /charset\s*=\s*["']?\s*([\w-]+)/i.exec(head);
+  if (cs && !/^utf-?8$/i.test(cs[1])) {
+    try { return new TextDecoder(cs[1]).decode(buf); } catch { /* 未対応の文字コードは utf8 で試す */ }
+  }
+  return buf.toString("utf8");
+}
+
 function htmlTitle(buf) {
-  const m = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(buf.toString("utf8"));
+  const m = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(decodeHtml(buf));
   if (!m) return "";
   return m[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim();
+}
+
+function parseMeta(text) {
+  const j = JSON.parse(text.replace(/^\uFEFF/, ""));
+  const str = (v, max) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+  return { title: str(j?.title, 100), description: str(j?.description, 500) };
 }
 
 function readMeta(dir) {
   const p = path.join(dir, "meta.json");
   if (!fs.existsSync(p)) return {};
-  let j;
-  try { j = JSON.parse(fs.readFileSync(p, "utf8").replace(/^\uFEFF/, "")); }
+  try { return parseMeta(fs.readFileSync(p, "utf8")); }
   catch (e) { throw new Error(`meta.json が不正: ${e.message}`); }
-  const str = (v, max) => (typeof v === "string" ? v.trim().slice(0, max) : "");
-  return { title: str(j?.title, 100), description: str(j?.description, 500) };
 }
 
 // ---------- ビルド ----------
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const MAX_THUMB_BYTES = 8 * 1024 * 1024;
+
+// games/<名前>.png と games/<名前>.json を、同名ゲームのサムネイル・メタ情報として使う（単一HTMLは中に置けないため）
+function readSidecar(gamesDir, base, files, log) {
+  const find = (ext) => files.find((f) => f.toLowerCase() === (base + ext).toLowerCase());
+  const out = { thumb: null, meta: {}, used: [] };
+  const png = find(".png");
+  if (png) {
+    out.used.push(png);
+    const buf = fs.readFileSync(path.join(gamesDir, png));
+    if (buf.length > MAX_THUMB_BYTES || !buf.subarray(0, 8).equals(PNG_MAGIC)) log(`warn: ${png} はPNGでないか大きすぎるため無視`);
+    else out.thumb = buf;
+  }
+  const json = find(".json");
+  if (json) {
+    out.used.push(json);
+    try { out.meta = parseMeta(fs.readFileSync(path.join(gamesDir, json), "utf8")); }
+    catch (e) { throw new Error(`${json} が不正: ${e.message}`); }
+  }
+  return out;
+}
 
 export function build({ gamesDir, outDir, launcherDir, log = console.log }) {
   const shimSource = fs.readFileSync(path.join(ROOT, "tools", "storage-shim.js"), "utf8");
@@ -240,6 +276,10 @@ export function build({ gamesDir, outDir, launcherDir, log = console.log }) {
   fs.writeFileSync(path.join(outDir, ".nojekyll"), "");
 
   const names = fs.existsSync(gamesDir) ? fs.readdirSync(gamesDir).filter((n) => !n.startsWith(".") && !isIgnored(n)).sort() : [];
+  const gameBase = (n) => n.replace(/\.(html?|zip)$/i, "");
+  const isGameEntry = (n) => /\.(html?|zip)$/i.test(n) || fs.lstatSync(path.join(gamesDir, n)).isDirectory();
+  const bases = new Set(names.filter(isGameEntry).map((n) => gameBase(n).toLowerCase()));
+  const allFiles = fs.existsSync(gamesDir) ? fs.readdirSync(gamesDir) : [];
   const used = new Set();
   const games = [];
   const errors = [];
@@ -252,7 +292,11 @@ export function build({ gamesDir, outDir, launcherDir, log = console.log }) {
     if (st.isDirectory()) { format = "folder"; base = entry; }
     else if (/\.html?$/i.test(entry)) { format = "single"; base = entry.replace(/\.html?$/i, ""); }
     else if (/\.zip$/i.test(entry)) { format = "zip"; base = entry.replace(/\.zip$/i, ""); }
-    else { log(`skip: ${entry}（対象外の形式）`); continue; }
+    else {
+      const m = /^(.*)\.(png|json)$/i.exec(entry);
+      if (!(m && bases.has(m[1].toLowerCase()))) log(`skip: ${entry}（対象外の形式）`);
+      continue;  // 同名ゲームのサムネイル・メタ情報は、そのゲームの処理で読む
+    }
 
     const id = makeId(base, used);
     const dest = path.join(outDir, "games", id);
@@ -270,9 +314,15 @@ export function build({ gamesDir, outDir, launcherDir, log = console.log }) {
       const indexPath = path.join(dest, "index.html");
       if (!fs.existsSync(indexPath)) throw new Error("index.html がない");
 
-      const meta = format === "single" ? {} : readMeta(dest);
+      const side = readSidecar(gamesDir, base, allFiles, log);
+      const own = format === "single" ? {} : readMeta(dest);
+      const meta = { title: own.title || side.meta.title, description: own.description || side.meta.description };
       const title = meta.title || htmlTitle(fs.readFileSync(indexPath)) || base;
-      const hasThumb = format !== "single" && fs.existsSync(path.join(dest, "thumbnail.png"));
+      const thumbPath = path.join(dest, "thumbnail.png");
+      if (format === "single" || !fs.existsSync(thumbPath)) {
+        if (side.thumb) fs.writeFileSync(thumbPath, side.thumb);
+      }
+      const hasThumb = fs.existsSync(thumbPath);
       injectAll(dest, id, shimSource);
 
       games.push({

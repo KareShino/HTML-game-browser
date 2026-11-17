@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func init() {
@@ -66,6 +67,20 @@ func (s safeFS) Open(name string) (http.File, error) {
 	return f, nil
 }
 
+// identHeader は、このサーバー自身であることを別プロセスが見分けるための印。
+const identHeader = "X-Html-Game-Launcher"
+
+// alreadyRunning は、指定ポートで同じランチャーが動いているかを調べる（二重起動で別ポートが増えないように）。
+func alreadyRunning(port int) bool {
+	c := &http.Client{Timeout: 800 * time.Millisecond}
+	resp, err := c.Get(fmt.Sprintf("http://127.0.0.1:%d/", port))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.Header.Get(identHeader) != ""
+}
+
 func newHandler(distDir string) http.Handler {
 	files := http.FileServer(safeFS{http.Dir(distDir)})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +94,7 @@ func newHandler(distDir string) http.Handler {
 			return
 		}
 		h := w.Header()
+		h.Set(identHeader, "1")
 		h.Set("Cache-Control", "no-cache")
 		h.Set("X-Content-Type-Options", "nosniff")
 		files.ServeHTTP(w, r)
