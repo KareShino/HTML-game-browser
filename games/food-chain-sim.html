@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>食物連鎖シミュレーター</title>
+<style>
+:root{--bg:#15171b;--fg:#d9dde3;--mut:#8b929c;--panel:rgba(25,28,33,.95);--line:#2d323b;--acc:#86b4ff}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+#c{display:block;width:100vw;height:100vh}
+#hud{position:fixed;left:10px;top:10px;padding:6px 10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;font-variant-numeric:tabular-nums;pointer-events:none;white-space:nowrap}
+#hud b{font-weight:600;margin-right:10px}
+#hud span{color:var(--mut);margin-right:4px}
+#bar{position:fixed;right:10px;top:10px;display:flex;gap:6px}
+button{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font:inherit;cursor:pointer;min-width:38px}
+button.on{border-color:var(--acc);color:var(--acc)}
+#panel{position:fixed;right:10px;top:52px;bottom:10px;width:290px;max-width:calc(100vw - 20px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 12px 12px;display:none;touch-action:pan-y}
+#panel.open{display:block}
+details{border-bottom:1px solid var(--line);padding:2px 0}
+summary{cursor:pointer;padding:6px 0;font-weight:600}
+.row{display:grid;grid-template-columns:1fr 58px;gap:0 8px;align-items:center;margin:6px 0}
+.row label{color:var(--mut);font-size:12px}
+.row output{text-align:right;font-variant-numeric:tabular-nums;font-size:12px}
+.row input{grid-column:1/3;width:100%;accent-color:var(--acc);margin:2px 0 0}
+.note{color:var(--mut);font-size:11px;margin:8px 0 4px}
+#reset{width:100%;margin-top:10px}
+#info{position:fixed;left:10px;bottom:10px;width:250px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;display:none;font-variant-numeric:tabular-nums}
+#info .t{display:flex;justify-content:space-between;margin-bottom:4px}
+#info .sw{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+#info .g{display:grid;grid-template-columns:62px 1fr 36px;gap:2px 6px;align-items:center;font-size:12px}
+#info .g span{color:var(--mut)}
+#info em{font-style:normal;text-align:right;white-space:nowrap}
+#info .bar{height:5px;background:#2a2f37;border-radius:3px;overflow:hidden}
+#info .bar i{display:block;height:100%;background:var(--fg);opacity:.7}
+#info .x{cursor:pointer;color:var(--mut)}
+#brain{display:block;margin-top:6px;width:230px;height:90px}
+@media (max-width:560px){#hud{top:54px}#panel{top:96px}}
+#fast{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);color:var(--mut);display:none;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<div id="bar">
+  <button id="bPause">❚❚</button>
+  <button id="bSpeed">1x</button>
+  <button id="bFast">高速</button>
+  <button id="bPanel">⚙</button>
+</div>
+<div id="panel"></div>
+<div id="info"></div>
+<div id="fast">高速モード中（描画停止）</div>
+
+<script id="sim">
+'use strict';
+// ===== パラメータ =====
+const P = {
+  baseCost:0.2, cSize:1.2, cReach:0.4, cJointN:0.12, cMouth:0.6, cWeapon:1.5, cVision:0.5, cSpeed:0.8, expo:2, moveCost:0.4,
+  plantEnergy:12, plantRegrow:80, plantMax:3000, meatBody:60, meatNutr:1.0, meatDecay:40,
+  reproThresh:0.65, childShare:0.45, crowdRadius:40, crowdMax:4,
+  maxJoints:6, bendMax:1.2, bendSpeed:4,
+  hidden:2, nodes:8, lr:0.02, rwHunger:1.0, rwDamage:1.0, inheritLearned:0.5,
+  mut:0.05, bigMutP:0.02, bigMut:0.4, structMutP:0.15,
+  mapW:2400, mapH:1600, regionStr:1.0, minPop:40, maxPop:800, push:0.5, maxAge:240,
+};
+const PARAM_DEFS = [
+  ['コスト', [
+    ['baseCost','基本代謝',0,3,0.05],
+    ['cSize','体サイズの係数',0,8,0.1],
+    ['cReach','関節の長さの係数',0,8,0.1],
+    ['cJointN','関節1つあたりのコスト',0,2,0.01],
+    ['cMouth','口サイズの係数（口1つあたり）',0,8,0.1],
+    ['cWeapon','武器の係数（武器1つあたり）',0,8,0.1],
+    ['cVision','視界の係数',0,8,0.1],
+    ['cSpeed','速度の係数',0,8,0.1],
+    ['expo','指数',1,3,0.1],
+    ['moveCost','移動コスト',0,3,0.05],
+  ]],
+  ['エネルギー', [
+    ['plantEnergy','植物の栄養',1,40,1],
+    ['plantRegrow','植物の再生（個/秒）',0,200,1],
+    ['plantMax','植物の最大数',100,5000,50],
+    ['meatBody','体の肉の量（サイズあたり）',0,300,5],
+    ['meatNutr','肉の栄養倍率',0.5,5,0.1],
+    ['meatDecay','肉の腐敗時間（秒）',5,200,1],
+  ]],
+  ['繁殖', [
+    ['reproThresh','繁殖に必要なエネルギー割合',0.3,1,0.01],
+    ['childShare','子に渡す割合',0.1,0.8,0.01],
+    ['crowdRadius','詰まり判定の範囲',10,120,1],
+    ['crowdMax','詰まり判定の個体数',1,12,1],
+  ]],
+  ['関節', [
+    ['maxJoints','関節の最大数',1,12,1,true],
+    ['bendMax','最大の曲げ角（rad）',0,3,0.05],
+    ['bendSpeed','曲げる速さ（rad/秒）',0.5,12,0.5],
+  ]],
+  ['脳', [
+    ['hidden','中間層の数',1,3,1,true],
+    ['nodes','各層のノード数',2,16,1,true],
+    ['lr','学習率',0,0.1,0.001],
+    ['rwHunger','空腹の報酬の重み',0,3,0.1],
+    ['rwDamage','ダメージの報酬の重み',0,3,0.1],
+    ['inheritLearned','学習結果を子に渡す割合',0,1,0.05],
+  ]],
+  ['変異', [
+    ['mut','通常の変異の強さ',0,0.3,0.005],
+    ['bigMutP','大きな変異の確率',0,0.2,0.005],
+    ['bigMut','大きな変異の強さ',0,1,0.05],
+    ['structMutP','関節構造の変異の確率',0,1,0.01],
+  ]],
+  ['世界', [
+    ['mapW','マップの幅',800,5000,100,true],
+    ['mapH','マップの高さ',600,4000,100,true],
+    ['regionStr','地域差の強さ',0,4,0.1],
+    ['minPop','補充する最低個体数',0,200,1],
+    ['maxPop','個体の最大数',50,3000,10],
+    ['push','押し返しの強さ',0,1,0.05],
+    ['maxAge','寿命（秒・0で無制限）',0,1000,10],
+  ]],
+];
+
+// ===== 定数・状態 =====
+const DT = 1/30, G = 80, NIN = 16, NT = 5, JR = 3;
+// 遺伝する能力: 0体サイズ 1口 2武器 3視界 4速度（関節構造は別に遺伝）
+const TRAIT_NAMES = ['体サイズ','口','武器','視界','速度'];
+// 関節の種類: 0つなぎ 1口 2武器
+let W, H, cols, rows, pg, mg, cg, jg;
+let creatures = [], plants = [], meats = [], newborn = [];
+let time = 0, nextId = 1, plantAcc = 0, births = 0, deaths = 0;
+let layerSizes, nW, NOUT, MAXJ, fert, fCols, fRows;
+const FC = 50;
+let projA, projB;
+const jointPool = []; let jointCount = 0;
+
+const rnd = (a,b) => a + Math.random()*(b-a);
+const rndi = n => (Math.random()*n)|0;
+function gauss(){ const u = 1-Math.random(), v = Math.random(); return Math.sqrt(-2*Math.log(u))*Math.cos(6.283185307*v); }
+const clamp01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
+const clamp = (x,a,b) => x < a ? a : x > b ? b : x;
+
+// ===== 空間分割 =====
+function makeGrid(){ return Array.from({length: cols*rows}, () => []); }
+function clearGrid(g){ for (let i = 0; i < g.length; i++) g[i].length = 0; }
+function gridAdd(g, o){
+  let cx = (o.x/G)|0, cy = (o.y/G)|0;
+  if (cx < 0) cx = 0; else if (cx >= cols) cx = cols-1;
+  if (cy < 0) cy = 0; else if (cy >= rows) cy = rows-1;
+  g[cy*cols+cx].push(o);
+}
+function fillGrid(g, list){ clearGrid(g); for (const o of list) if (!o.dead) gridAdd(g, o); }
+let _best = null, _bd = 0;
+// mode 0:すべて 1:自分より大きい 2:自分以下
+function nearestIn(g, x, y, r, self, mode, rad){
+  _best = null; _bd = r*r;
+  const x0 = Math.max(0, ((x-r)/G)|0), x1 = Math.min(cols-1, ((x+r)/G)|0);
+  const y0 = Math.max(0, ((y-r)/G)|0), y1 = Math.min(rows-1, ((y+r)/G)|0);
+  for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++){
+    const cell = g[cy*cols+cx];
+    for (let i = 0; i < cell.length; i++){
+      const o = cell[i];
+      if (o === self || o.dead) continue;
+      if (mode === 1 && o.rad <= rad) continue;
+      if (mode === 2 && o.rad > rad) continue;
+      const dx = o.x-x, dy = o.y-y, d = dx*dx+dy*dy;
+      if (d < _bd){ _bd = d; _best = o; }
+    }
+  }
+  return _best;
+}
+function countIn(g, x, y, r, self){
+  let n = 0; const r2 = r*r;
+  const x0 = Math.max(0, ((x-r)/G)|0), x1 = Math.min(cols-1, ((x+r)/G)|0);
+  const y0 = Math.max(0, ((y-r)/G)|0), y1 = Math.min(rows-1, ((y+r)/G)|0);
+  for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++){
+    for (const o of g[cy*cols+cx]){ if (o === self || o.dead) continue; const dx = o.x-x, dy = o.y-y; if (dx*dx+dy*dy < r2) n++; }
+  }
+  return n;
+}
+
+// ===== 地域（植物の育ちやすさ） =====
+function makeFertility(){
+  fCols = Math.ceil(W/FC); fRows = Math.ceil(H/FC);
+  fert = new Float32Array(fCols*fRows);
+  const blobs = [];
+  const n = 4 + Math.round(W*H/1.2e6);
+  for (let i = 0; i < n; i++) blobs.push([rnd(0,W), rnd(0,H), rnd(180,480)]);
+  let mx = 0;
+  for (let y = 0; y < fRows; y++) for (let x = 0; x < fCols; x++){
+    const wx = (x+0.5)*FC, wy = (y+0.5)*FC; let f = 0;
+    for (const [bx,by,s] of blobs){ const dx = wx-bx, dy = wy-by; f += Math.exp(-(dx*dx+dy*dy)/(2*s*s)); }
+    fert[y*fCols+x] = f; if (f > mx) mx = f;
+  }
+  for (let i = 0; i < fert.length; i++) fert[i] = 0.08 + 0.92*Math.min(1, fert[i]/mx);
+}
+function fertAt(x, y){
+  const fx = Math.min(fCols-1, (x/FC)|0), fy = Math.min(fRows-1, (y/FC)|0);
+  return fert[fy*fCols+fx];
+}
+
+// ===== 脳 =====
+// 出力: 0旋回 1前進 2攻撃 3〜 各関節の曲げ
+function setupTopology(){
+  MAXJ = P.maxJoints;
+  NOUT = 3 + MAXJ;
+  layerSizes = [NIN];
+  for (let i = 0; i < P.hidden; i++) layerSizes.push(P.nodes);
+  layerSizes.push(NOUT);
+  nW = 0;
+  for (let l = 0; l < layerSizes.length-1; l++) nW += (layerSizes[l]+1)*layerSizes[l+1];
+}
+function randomBrain(){ const b = new Float32Array(nW); for (let i = 0; i < nW; i++) b[i] = gauss()*0.6; return b; }
+
+function think(c){
+  const w = c.w, ls = layerSizes, L = ls.length;
+  let off = 0;
+  for (let l = 0; l < L-1; l++){
+    const x = c.acts[l], y = c.acts[l+1], z = c.noise[l], nin = ls[l], nout = ls[l+1];
+    for (let j = 0; j < nout; j++){
+      let s = w[off++];
+      for (let i = 0; i < nin; i++) s += w[off++]*x[i];
+      const n = (Math.random()+Math.random()+Math.random()-1.5)*0.25;
+      z[j] = n; y[j] = Math.tanh(s+n);
+    }
+  }
+}
+// 適格度トレース（ノード摂動）: e = λe + x·ξ
+function trace(c){
+  const e = c.e, ls = layerSizes, L = ls.length, lam = 0.9;
+  let off = 0;
+  for (let l = 0; l < L-1; l++){
+    const x = c.acts[l], z = c.noise[l], nin = ls[l], nout = ls[l+1];
+    for (let j = 0; j < nout; j++){
+      const zj = z[j];
+      e[off] = lam*e[off] + zj; off++;
+      for (let i = 0; i < nin; i++){ e[off] = lam*e[off] + x[i]*zj; off++; }
+    }
+  }
+}
+function applyLearn(c, R){
+  c.rbar += 0.02*(R - c.rbar);
+  const adv = R - c.rbar;
+  if (adv === 0 || P.lr === 0) return;
+  const k = P.lr*adv, w = c.w, e = c.e;
+  for (let i = 0; i < nW; i++){
+    const v = w[i] + k*e[i];
+    w[i] = v > 4 ? 4 : v < -4 ? -4 : v;
+  }
+}
+
+// ===== 関節 =====
+// nodes: [{p:親(-1=胴体), ang:基準角, len:長さ, tip:先端の種類}]  親は必ず自分より前の番号
+function deriveBody(c){
+  const n = c.nodes.length;
+  const leaf = new Array(n).fill(true);
+  for (const nd of c.nodes) if (nd.p >= 0) leaf[nd.p] = false;
+  c.kind = c.nodes.map((nd, i) => leaf[i] ? nd.tip : 0);
+  c.nMouth = 0; c.nWeapon = 0; c.totLen = 0; c.nConn = 0;
+  for (let i = 0; i < n; i++){
+    if (c.kind[i] === 1) c.nMouth++; else if (c.kind[i] === 2) c.nWeapon++; else c.nConn++;
+    c.totLen += c.nodes[i].len;
+  }
+}
+// 順運動学: 関節の位置を計算
+function fk(c){
+  const nodes = c.nodes;
+  for (let i = 0; i < nodes.length; i++){
+    const nd = nodes[i]; let ox, oy, base;
+    if (nd.p < 0){ base = c.a + nd.ang; ox = c.x + Math.cos(base)*c.rad; oy = c.y + Math.sin(base)*c.rad; }
+    else { ox = c.nx[nd.p]; oy = c.ny[nd.p]; base = c.na[nd.p] + nd.ang; }
+    const d = base + c.bend[i];
+    c.na[i] = d; c.nx[i] = ox + Math.cos(d)*nd.len; c.ny[i] = oy + Math.sin(d)*nd.len;
+  }
+}
+// 自分のつなぎ関節同士の重なり数（親子は除く）
+function selfOverlaps(c){
+  let k = 0; const n = c.nodes.length, r2 = 4*JR*JR;
+  for (let i = 0; i < n; i++){
+    if (c.kind[i] !== 0) continue;
+    for (let j = i+1; j < n; j++){
+      if (c.kind[j] !== 0 || c.nodes[j].p === i || c.nodes[i].p === j) continue;
+      const dx = c.nx[i]-c.nx[j], dy = c.ny[i]-c.ny[j];
+      if (dx*dx+dy*dy < r2) k++;
+    }
+  }
+  return k;
+}
+function updateBends(c, out){
+  const n = c.nodes.length, sp = P.bendSpeed*DT;
+  if (c.nConn < 2){
+    for (let i = 0; i < n; i++){ const tgt = out[3+i]*P.bendMax; c.bend[i] += clamp(tgt-c.bend[i], -sp, sp); }
+    fk(c); return;
+  }
+  fk(c);
+  let ov = selfOverlaps(c);
+  for (let i = 0; i < n; i++){
+    const tgt = out[3+i]*P.bendMax, old = c.bend[i];
+    const nb = old + clamp(tgt-old, -sp, sp);
+    if (Math.abs(nb-old) < 1e-5) continue;
+    c.bend[i] = nb; fk(c);
+    const o2 = selfOverlaps(c);
+    if (o2 > ov){ c.bend[i] = old; fk(c); } else ov = o2;
+  }
+}
+function randomNodes(){
+  const nodes = [];
+  if (Math.random() < 0.5){
+    nodes.push({p: -1, ang: rnd(-0.4,0.4), len: rnd(15,40), tip: 1});
+  } else {
+    nodes.push({p: -1, ang: rnd(-0.4,0.4), len: rnd(12,25), tip: 0});
+    nodes.push({p: 0, ang: rnd(-0.6,0.6), len: rnd(12,25), tip: 1});
+  }
+  if (Math.random() < 0.3) nodes.push({p: -1, ang: (Math.random()<0.5?-1:1)*rnd(0.5,1.5), len: rnd(10,30), tip: 2});
+  return nodes;
+}
+function mutateNodes(src){
+  const nodes = src.map(n => ({p: n.p, ang: clamp(mutateVal(n.ang, 0.8), -3.1, 3.1), len: clamp(mutateVal(n.len, 30), 6, 70), tip: n.tip}));
+  if (Math.random() < P.structMutP){
+    const r = Math.random();
+    if (r < 0.4 && nodes.length < MAXJ){
+      // 関節を追加（胴体か既存の関節から枝分かれ）
+      const par = Math.random() < 0.3 ? -1 : rndi(nodes.length);
+      nodes.push({p: par, ang: rnd(-1,1), len: rnd(10,35), tip: Math.random() < 0.6 ? 1 : 2});
+    } else if (r < 0.7 && nodes.length > 1){
+      // 先端の関節を削除
+      const leaves = [];
+      for (let i = 0; i < nodes.length; i++) if (!nodes.some(n => n.p === i)) leaves.push(i);
+      const k = leaves[rndi(leaves.length)];
+      nodes.splice(k, 1);
+      for (const n of nodes) if (n.p > k) n.p--;
+    } else {
+      // 先端の種類を変える
+      const nd = nodes[rndi(nodes.length)];
+      nd.tip = (nd.tip + 1 + rndi(2)) % 3;
+    }
+  }
+  return nodes;
+}
+
+// ===== 生物 =====
+function computeHue(c){
+  const f = [];
+  for (let i = 0; i < NT; i++) f.push((c.t[i]-0.5)*3);
+  f.push((c.nodes.length-2)*0.6, (c.nMouth-1)*0.8, c.nWeapon*0.8, (c.totLen-50)/40);
+  for (let i = 0; i < 16; i++) f.push(c.innate[i]*0.35);
+  let a = 0, b = 0;
+  for (let i = 0; i < f.length; i++){ a += projA[i]*f[i]; b += projB[i]*f[i]; }
+  return (Math.atan2(b, a)/6.283185307*360 + 360) % 360;
+}
+function derive(c){
+  const [s, m, w, v, sp] = c.t;
+  c.rad = 4 + 14*s;
+  c.maxE = 50 + 250*s;
+  c.maxHp = 20 + 120*s;
+  c.mouthR = 3 + 5*m;
+  c.bite = 3 + 25*m;
+  c.vis = 60 + 240*v;
+  c.vmax = (20 + 80*sp)*(1 - 0.5*s);
+  deriveBody(c);
+  c.turn = 2.5*(1 - 0.3*s)/(1 + c.totLen/150);
+}
+function makeCreature(x, y, traits, nodes, innate, gen, energy){
+  const c = {
+    id: nextId++, x, y, a: rnd(0, 6.283), t: traits, nodes, innate, w: Float32Array.from(innate), e: new Float32Array(nW),
+    gen, age: 0, kids: 0, cool: 3, rbar: 0, gain: 0, dmgTaken: 0, fwd: 0, atk: false, thought: false, dead: false, flash: 0,
+    acts: layerSizes.map(n => new Float32Array(n)), noise: layerSizes.slice(1).map(n => new Float32Array(n)),
+    bend: new Float32Array(MAXJ), nx: new Float32Array(MAXJ), ny: new Float32Array(MAXJ), na: new Float32Array(MAXJ),
+    seen: [null, null, null, null],
+  };
+  derive(c);
+  c.energy = energy != null ? energy : c.maxE*0.7;
+  c.hp = c.maxHp;
+  c.hue = computeHue(c);
+  fk(c);
+  return c;
+}
+function randomCreature(){
+  const t = [rnd(0,0.6), rnd(0,0.5), rnd(0.1,0.6), rnd(0.1,0.6), rnd(0.1,0.6)];
+  return makeCreature(rnd(20, W-20), rnd(20, H-20), t, randomNodes(), randomBrain(), 0);
+}
+function mutateVal(v, scale){
+  const big = Math.random() < P.bigMutP;
+  return v + gauss()*(big ? P.bigMut : P.mut)*scale;
+}
+function makeChild(p, energy){
+  const t = p.t.map(v => clamp01(mutateVal(v, 1)));
+  const innate = new Float32Array(nW), k = P.inheritLearned;
+  for (let i = 0; i < nW; i++){
+    const v = mutateVal(p.innate[i]*(1-k) + p.w[i]*k, 2);
+    innate[i] = v > 4 ? 4 : v < -4 ? -4 : v;
+  }
+  const ang = rnd(0, 6.283), d = p.rad*2 + 4;
+  const x = Math.min(W-5, Math.max(5, p.x + Math.cos(ang)*d));
+  const y = Math.min(H-5, Math.max(5, p.y + Math.sin(ang)*d));
+  return makeCreature(x, y, t, mutateNodes(p.nodes), innate, p.gen+1, energy);
+}
+
+// ===== 感覚 =====
+function putTarget(inp, o, c, t, d2, extra){
+  if (!t){ inp[o] = 0; inp[o+1] = 0; inp[o+2] = 0; if (extra) inp[o+3] = 0; return; }
+  const ang = Math.atan2(t.y-c.y, t.x-c.x) - c.a;
+  inp[o] = Math.sin(ang); inp[o+1] = Math.cos(ang); inp[o+2] = 1 - Math.sqrt(d2)/c.vis;
+  if (extra) inp[o+3] = (t.rad - c.rad)/18;
+}
+function sense(c){
+  const inp = c.acts[0], r = c.vis;
+  nearestIn(pg, c.x, c.y, r, null, 0); c.seen[0] = _best; putTarget(inp, 0, c, _best, _bd, false);
+  nearestIn(mg, c.x, c.y, r, null, 0); c.seen[1] = _best; putTarget(inp, 3, c, _best, _bd, false);
+  nearestIn(cg, c.x, c.y, r, c, 1, c.rad); c.seen[2] = _best; putTarget(inp, 6, c, _best, _bd, true);
+  nearestIn(cg, c.x, c.y, r, c, 2, c.rad); c.seen[3] = _best; putTarget(inp, 10, c, _best, _bd, true);
+  inp[14] = c.energy/c.maxE;
+  inp[15] = c.hp/c.maxHp;
+}
+
+// ===== 初期化 =====
+function init(){
+  W = P.mapW; H = P.mapH;
+  cols = Math.ceil(W/G); rows = Math.ceil(H/G);
+  pg = makeGrid(); mg = makeGrid(); cg = makeGrid(); jg = makeGrid();
+  setupTopology();
+  const nf = NT + 4 + 16;
+  projA = Array.from({length: nf}, gauss); projB = Array.from({length: nf}, gauss);
+  makeFertility();
+  creatures = []; plants = []; meats = []; newborn = [];
+  time = 0; plantAcc = 0; births = 0; deaths = 0;
+  const n0 = Math.round(P.plantMax*0.6);
+  for (let i = 0; i < n0; i++) spawnPlant();
+  const c0 = Math.min(P.maxPop, Math.max(P.minPop, 120));
+  for (let i = 0; i < c0; i++) creatures.push(randomCreature());
+}
+function spawnPlant(){
+  for (let k = 0; k < 6; k++){
+    const x = rnd(4, W-4), y = rnd(4, H-4);
+    if (Math.random() < Math.pow(fertAt(x, y), P.regionStr)){
+      plants.push({x, y, e: P.plantEnergy, dead: false});
+      return;
+    }
+  }
+}
+
+// ===== 押し返し =====
+function pushApart(a, b, nx, ny, ov){
+  const k = ov*0.5*P.push;
+  a.x -= nx*k; a.y -= ny*k; b.x += nx*k; b.y += ny*k;
+}
+function keepIn(c){
+  if (c.x < c.rad) c.x = c.rad; else if (c.x > W-c.rad) c.x = W-c.rad;
+  if (c.y < c.rad) c.y = c.rad; else if (c.y > H-c.rad) c.y = H-c.rad;
+}
+function collide(){
+  // 胴体同士
+  fillGrid(cg, creatures);
+  for (const c of creatures){
+    if (c.dead) continue;
+    const r = c.rad + 18;
+    const x0 = Math.max(0, ((c.x-r)/G)|0), x1 = Math.min(cols-1, ((c.x+r)/G)|0);
+    const y0 = Math.max(0, ((c.y-r)/G)|0), y1 = Math.min(rows-1, ((c.y+r)/G)|0);
+    for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++){
+      for (const o of cg[cy*cols+cx]){
+        if (o.id <= c.id || o.dead) continue;
+        const dx = o.x-c.x, dy = o.y-c.y, rr = c.rad+o.rad, d2 = dx*dx+dy*dy;
+        if (d2 < rr*rr && d2 > 1e-6){ const d = Math.sqrt(d2); pushApart(c, o, dx/d, dy/d, rr-d); }
+      }
+    }
+  }
+  // つなぎ関節: 他個体のつなぎ関節・他個体の胴体とぶつかる
+  clearGrid(jg); jointCount = 0;
+  for (const c of creatures){
+    if (c.dead) continue;
+    for (let i = 0; i < c.nodes.length; i++){
+      if (c.kind[i] !== 0) continue;
+      let j = jointPool[jointCount];
+      if (!j){ j = {x: 0, y: 0, c: null}; jointPool.push(j); }
+      jointCount++;
+      j.x = c.nx[i]; j.y = c.ny[i]; j.c = c;
+      gridAdd(jg, j);
+    }
+  }
+  const r2j = 4*JR*JR;
+  for (let k = 0; k < jointCount; k++){
+    const j = jointPool[k], c = j.c;
+    const r = 2*JR + 18;
+    const x0 = Math.max(0, ((j.x-r)/G)|0), x1 = Math.min(cols-1, ((j.x+r)/G)|0);
+    const y0 = Math.max(0, ((j.y-r)/G)|0), y1 = Math.min(rows-1, ((j.y+r)/G)|0);
+    for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++){
+      const idx = cy*cols+cx;
+      for (const o of jg[idx]){
+        if (o.c === c || o.c.id < c.id) continue;
+        const dx = o.x-j.x, dy = o.y-j.y, d2 = dx*dx+dy*dy;
+        if (d2 < r2j && d2 > 1e-6){ const d = Math.sqrt(d2); pushApart(c, o.c, dx/d, dy/d, 2*JR-d); }
+      }
+      for (const o of cg[idx]){
+        if (o === c || o.dead) continue;
+        const dx = o.x-j.x, dy = o.y-j.y, rr = o.rad+JR, d2 = dx*dx+dy*dy;
+        if (d2 < rr*rr && d2 > 1e-6){ const d = Math.sqrt(d2); pushApart(c, o, dx/d, dy/d, rr-d); }
+      }
+    }
+  }
+  for (const c of creatures){ keepIn(c); fk(c); }
+}
+
+// ===== 1ステップ =====
+function step(){
+  const dt = DT;
+  time += dt;
+  fillGrid(pg, plants); fillGrid(mg, meats); fillGrid(cg, creatures);
+
+  const ex = P.expo;
+  for (const c of creatures){
+    if (c.dead) continue;
+    c.age += dt; c.cool -= dt; if (c.flash > 0) c.flash -= dt;
+
+    // 報酬: 空腹が減る＝快、ダメージ＝不快
+    const R = P.rwHunger*(c.gain/c.maxE)*30 - P.rwDamage*(c.dmgTaken/c.maxHp)*30;
+    if (c.thought) applyLearn(c, R);
+    c.gain = 0; c.dmgTaken = 0;
+
+    sense(c); think(c); trace(c); c.thought = true;
+    const out = c.acts[layerSizes.length-1];
+    const turn = out[0], fwd = (out[1]+1)*0.5, atk = out[2] > 0;
+    c.fwd = fwd; c.atk = atk;
+
+    // 移動
+    c.a += turn*c.turn*dt;
+    const v = fwd*c.vmax;
+    c.x += Math.cos(c.a)*v*dt; c.y += Math.sin(c.a)*v*dt;
+    keepIn(c);
+
+    // 関節を曲げる（自分のつなぎ関節同士がぶつかる動きは止める）
+    updateBends(c, out);
+
+    // 先端: 口で食べる・武器で攻撃
+    const wpn = c.t[2];
+    let attacked = false;
+    for (let i = 0; i < c.nodes.length; i++){
+      const kd = c.kind[i];
+      if (kd === 1 && c.energy < c.maxE){
+        const tx = c.nx[i], ty = c.ny[i];
+        const p = nearestIn(pg, tx, ty, c.mouthR+2, null, 0);
+        if (p && p.e > 0){
+          const amt = Math.min(c.bite*dt, p.e, c.maxE-c.energy);
+          p.e -= amt; c.energy += amt; c.gain += amt;
+          if (p.e <= 0) p.dead = true;
+        } else {
+          const m = nearestIn(mg, tx, ty, c.mouthR+3, null, 0);
+          if (m && m.e > 0){
+            const amt = Math.min(c.bite*dt, m.e, (c.maxE-c.energy)/P.meatNutr);
+            m.e -= amt; c.energy += amt*P.meatNutr; c.gain += amt*P.meatNutr;
+            if (m.e <= 0) m.dead = true;
+          }
+        }
+      } else if (kd === 2 && atk && wpn > 0.02){
+        attacked = true;
+        const t = nearestIn(cg, c.nx[i], c.ny[i], 20, c, 0);
+        if (t && Math.sqrt(_bd) < t.rad + 2){
+          const dmg = 40*wpn/(0.4 + t.t[0])*dt;
+          t.hp -= dmg; t.dmgTaken += dmg; t.flash = 0.25;
+        }
+      }
+    }
+    if (attacked) c.energy -= 1.0*wpn*c.nWeapon*dt;
+
+    // コスト（有利な能力ほど高い）
+    const t = c.t;
+    let lenCost = 0;
+    for (const nd of c.nodes) lenCost += Math.pow(nd.len/60, ex);
+    const cost = P.baseCost
+      + P.cSize*Math.pow(t[0], ex)
+      + P.cMouth*Math.pow(t[1], ex)*c.nMouth
+      + P.cWeapon*Math.pow(t[2], ex)*c.nWeapon
+      + P.cVision*Math.pow(t[3], ex) + P.cSpeed*Math.pow(t[4], ex)
+      + P.cReach*lenCost + P.cJointN*c.nodes.length
+      + P.moveCost*fwd*fwd*(c.vmax/50);
+    c.energy -= cost*dt;
+
+    // HP自然回復（エネルギーを使う）
+    if (c.hp < c.maxHp){ const h = Math.min(2*dt, c.maxHp-c.hp); c.hp += h; c.energy -= h*0.5; }
+
+    // 繁殖（周囲が詰まっていたら・最大数に達していたらしない）
+    if (c.age > 5 && c.cool <= 0 && c.energy >= P.reproThresh*c.maxE && creatures.length + newborn.length < P.maxPop){
+      if (countIn(cg, c.x, c.y, P.crowdRadius + c.rad, c) < P.crowdMax){
+        const ce = c.energy*P.childShare;
+        c.energy -= ce*1.1; c.cool = 3; c.kids++;
+        newborn.push(makeChild(c, ce)); births++;
+      } else c.cool = 0.5;
+    }
+  }
+
+  if (P.push > 0) collide();
+
+  // 死亡 → 肉
+  for (const c of creatures){
+    if (c.dead) continue;
+    if (c.hp <= 0 || c.energy <= 0 || (P.maxAge > 0 && c.age > P.maxAge)){
+      c.dead = true; deaths++;
+      // 肉の総量 = 体の大きさによる分 + 保持していたエネルギー
+      const total = P.meatBody*(0.2 + c.t[0]) + Math.max(0, c.energy);
+      // 体が大きいほど肉の塊が多く出る
+      const n = 1 + Math.floor(c.t[0]*5);
+      for (let k = 0; k < n; k++){
+        const a = k/n*6.283 + rnd(0, 0.5), d = n > 1 ? c.rad*0.6 : 0, e = total/n;
+        meats.push({x: clamp(c.x + Math.cos(a)*d, 1, W-1), y: clamp(c.y + Math.sin(a)*d, 1, H-1), e, e0: e, dead: false});
+      }
+    }
+  }
+  creatures = creatures.filter(c => !c.dead);
+  if (newborn.length){ for (const n of newborn) creatures.push(n); newborn = []; }
+
+  for (const m of meats){ m.e -= m.e0/P.meatDecay*dt; if (m.e <= 0) m.dead = true; }
+  meats = meats.filter(m => !m.dead);
+  plants = plants.filter(p => !p.dead);
+
+  plantAcc += P.plantRegrow*dt;
+  while (plantAcc >= 1){ plantAcc -= 1; if (plants.length < P.plantMax) spawnPlant(); }
+  if (plants.length > P.plantMax) plants.length = P.plantMax;
+
+  if (creatures.length < Math.min(P.minPop, P.maxPop)) creatures.push(randomCreature());
+}
+
+function speciesCount(){
+  const bins = new Array(24).fill(0);
+  for (const c of creatures) bins[Math.floor(c.hue/15) % 24]++;
+  let n = 0; for (const b of bins) if (b >= 3) n++;
+  return n;
+}
+</script>
+
+<script id="ui">
+'use strict';
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const hud = document.getElementById('hud'), info = document.getElementById('info');
+let dpr = 1, vw = 0, vh = 0;
+const cam = {x: 0, y: 0, z: 1};
+let paused = false, speedIdx = 0, fast = false, selected = null;
+const SPEEDS = [1, 3, 10];
+let fertCanvas = null;
+
+function resize(){
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  vw = innerWidth; vh = innerHeight;
+  cv.width = vw*dpr; cv.height = vh*dpr;
+}
+function fitCam(){
+  cam.z = Math.min(vw/W, vh/H)*0.95;
+  cam.x = W/2 - vw/2/cam.z; cam.y = H/2 - vh/2/cam.z;
+}
+function buildFertCanvas(){
+  fertCanvas = document.createElement('canvas');
+  fertCanvas.width = fCols; fertCanvas.height = fRows;
+  const fx = fertCanvas.getContext('2d'), img = fx.createImageData(fCols, fRows);
+  for (let i = 0; i < fert.length; i++){
+    const f = fert[i];
+    img.data[i*4] = 30 + f*6; img.data[i*4+1] = 34 + f*14; img.data[i*4+2] = 38 + f*4; img.data[i*4+3] = 255;
+  }
+  fx.putImageData(img, 0, 0);
+}
+function restart(){ init(); buildFertCanvas(); fitCam(); selected = null; info.style.display = 'none'; }
+
+// ===== 描画 =====
+function draw(){
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle = '#15171b'; ctx.fillRect(0, 0, cv.width, cv.height);
+  const z = cam.z*dpr;
+  ctx.setTransform(z, 0, 0, z, -cam.x*z, -cam.y*z);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(fertCanvas, 0, 0, W, H);
+  ctx.strokeStyle = '#2d323b'; ctx.lineWidth = 1/cam.z; ctx.strokeRect(0, 0, W, H);
+
+  const vx0 = cam.x - 40, vy0 = cam.y - 40, vx1 = cam.x + vw/cam.z + 40, vy1 = cam.y + vh/cam.z + 40;
+  const vis = o => o.x > vx0 && o.x < vx1 && o.y > vy0 && o.y < vy1;
+
+  // 植物（小さい点）
+  ctx.fillStyle = '#4e7a55';
+  for (const p of plants) if (vis(p)) ctx.fillRect(p.x-1.6, p.y-1.6, 3.2, 3.2);
+  // 肉（四角）
+  ctx.fillStyle = '#8a5a4a';
+  for (const m of meats) if (vis(m)){ const s = 2 + Math.min(4, m.e/12); ctx.globalAlpha = 0.4 + 0.6*m.e/m.e0; ctx.fillRect(m.x-s, m.y-s, s*2, s*2); }
+  ctx.globalAlpha = 1;
+
+  // 選択個体の視界
+  if (selected){
+    const c = selected;
+    ctx.strokeStyle = 'rgba(134,180,255,.35)'; ctx.lineWidth = 1/cam.z;
+    ctx.setLineDash([6/cam.z, 6/cam.z]);
+    ctx.beginPath(); ctx.arc(c.x, c.y, c.vis, 0, 6.283); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = 'rgba(134,180,255,.5)';
+    ctx.beginPath();
+    for (const t of c.seen) if (t && !t.dead){ ctx.moveTo(c.x, c.y); ctx.lineTo(t.x, t.y); }
+    ctx.stroke();
+  }
+
+  // 関節をつなぐ線
+  const lw = Math.max(1.6/cam.z, 1.7);
+  ctx.strokeStyle = 'rgba(205,210,220,.5)'; ctx.lineWidth = lw; ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (const c of creatures) if (vis(c)){
+    for (let i = 0; i < c.nodes.length; i++){
+      const nd = c.nodes[i];
+      let ox, oy;
+      if (nd.p < 0){ const b = c.a + nd.ang; ox = c.x + Math.cos(b)*c.rad; oy = c.y + Math.sin(b)*c.rad; }
+      else { ox = c.nx[nd.p]; oy = c.ny[nd.p]; }
+      ctx.moveTo(ox, oy); ctx.lineTo(c.nx[i], c.ny[i]);
+    }
+  }
+  ctx.stroke();
+  // つなぎ関節（小さな丸）
+  ctx.fillStyle = 'rgba(205,210,220,.7)';
+  ctx.beginPath();
+  for (const c of creatures) if (vis(c)){
+    for (let i = 0; i < c.nodes.length; i++) if (c.kind[i] === 0){ ctx.moveTo(c.nx[i] + JR, c.ny[i]); ctx.arc(c.nx[i], c.ny[i], JR, 0, 6.283); }
+  }
+  ctx.fill();
+
+  // 胴体（色は種のみ）・ダメージで赤くフラッシュ
+  for (const c of creatures) if (vis(c)){
+    ctx.fillStyle = `hsl(${c.hue|0},50%,58%)`;
+    ctx.beginPath(); ctx.arc(c.x, c.y, c.rad, 0, 6.283); ctx.fill();
+    if (c.flash > 0){
+      ctx.fillStyle = `rgba(255,60,50,${Math.min(1, c.flash/0.25)*0.85})`;
+      ctx.beginPath(); ctx.arc(c.x, c.y, c.rad + 1, 0, 6.283); ctx.fill();
+    }
+  }
+  // 先端の印（口＝点、武器＝十字）
+  ctx.fillStyle = '#d9dde3'; ctx.strokeStyle = '#d9dde3'; ctx.lineWidth = Math.max(1/cam.z, 1.6);
+  ctx.beginPath();
+  for (const c of creatures) if (vis(c)){
+    const r = 1.5 + c.t[1]*2.5;
+    for (let i = 0; i < c.nodes.length; i++) if (c.kind[i] === 1){ ctx.moveTo(c.nx[i] + r, c.ny[i]); ctx.arc(c.nx[i], c.ny[i], r, 0, 6.283); }
+  }
+  ctx.fill();
+  ctx.beginPath();
+  for (const c of creatures) if (vis(c)){
+    const s = 2.5 + c.t[2]*3;
+    for (let i = 0; i < c.nodes.length; i++) if (c.kind[i] === 2){
+      const a = c.na[i] + 0.785, ca = Math.cos(a)*s, sa = Math.sin(a)*s, x = c.nx[i], y = c.ny[i];
+      ctx.moveTo(x-ca, y-sa); ctx.lineTo(x+ca, y+sa);
+      ctx.moveTo(x+sa, y-ca); ctx.lineTo(x-sa, y+ca);
+    }
+  }
+  ctx.stroke();
+
+  if (selected){
+    ctx.strokeStyle = '#86b4ff'; ctx.lineWidth = 2/cam.z;
+    ctx.beginPath(); ctx.arc(selected.x, selected.y, selected.rad + 3/cam.z, 0, 6.283); ctx.stroke();
+  }
+}
+
+// ===== HUD・個体情報 =====
+function fmtTime(s){ s = s|0; const h = (s/3600)|0, m = ((s%3600)/60)|0, ss = s%60; return (h ? h+':' : '') + String(m).padStart(h?2:1,'0') + ':' + String(ss).padStart(2,'0'); }
+function updateHud(){
+  hud.innerHTML = `<span>個体</span><b>${creatures.length}</b><span>種</span><b>${speciesCount()}</b><span>時間</span><b style="margin:0">${fmtTime(time)}</b>`;
+}
+function bar(v){ return `<div class="bar"><i style="width:${Math.max(0,Math.min(1,v))*100}%"></i></div>`; }
+function updateInfo(){
+  if (!selected) return;
+  if (selected.dead){ info.innerHTML = '<div class="t"><span>この個体は死亡しました</span><span class="x" id="ix">✕</span></div>'; bindClose(); return; }
+  const c = selected;
+  let h = `<div class="t"><span><i class="sw" style="background:hsl(${c.hue|0},50%,58%)"></i>#${c.id}　第${c.gen}世代</span><span class="x" id="ix">✕</span></div><div class="g">`;
+  h += `<span>エネルギー</span>${bar(c.energy/c.maxE)}<em>${c.energy|0}</em>`;
+  h += `<span>HP</span>${bar(c.hp/c.maxHp)}<em>${c.hp|0}</em>`;
+  for (let i = 0; i < NT; i++) h += `<span>${TRAIT_NAMES[i]}</span>${bar(c.t[i])}<em>${c.t[i].toFixed(2)}</em>`;
+  h += `<span>関節</span><em>${c.nodes.length}（口${c.nMouth}・武器${c.nWeapon}）</em><em></em>`;
+  h += `<span>年齢</span><em>${c.age|0}秒</em><em></em><span>子の数</span><em>${c.kids}</em><em></em>`;
+  h += `</div><canvas id="brain" width="460" height="180"></canvas>`;
+  info.innerHTML = h; bindClose();
+  drawBrain(c, document.getElementById('brain'));
+}
+function bindClose(){ const x = document.getElementById('ix'); if (x) x.onclick = () => { selected = null; info.style.display = 'none'; }; }
+function drawBrain(c, el){
+  const b = el.getContext('2d'), Wb = el.width, Hb = el.height, L = layerSizes.length;
+  b.clearRect(0, 0, Wb, Hb);
+  b.font = '18px system-ui'; b.fillStyle = '#8b929c';
+  for (let l = 0; l < L; l++){
+    const n = layerSizes[l], x = 20 + l*(Wb-90)/(L-1), gap = Math.min(18, (Hb-20)/n);
+    for (let i = 0; i < n; i++){
+      const y = Hb/2 + (i - (n-1)/2)*gap, a = c.acts[l][i];
+      b.fillStyle = a >= 0 ? `rgba(134,180,255,${0.15+0.85*Math.min(1,a)})` : `rgba(230,160,110,${0.15+0.85*Math.min(1,-a)})`;
+      b.beginPath(); b.arc(x, y, Math.max(3, gap*0.38), 0, 6.283); b.fill();
+    }
+  }
+  const lx = 20 + (Wb-90) + 14, n = layerSizes[L-1], gap = Math.min(18, (Hb-20)/n);
+  b.fillStyle = '#8b929c';
+  ['旋回','前進','攻撃'].forEach((t, i) => b.fillText(t, lx, Hb/2 + (i-(n-1)/2)*gap + 6));
+  b.fillText('関節', lx, Hb/2 + (3+(MAXJ-1)/2-(n-1)/2)*gap + 6);
+}
+
+// ===== パネル =====
+function buildPanel(){
+  const el = document.getElementById('panel');
+  let h = '';
+  PARAM_DEFS.forEach(([g, items], gi) => {
+    h += `<details${gi === 0 ? ' open' : ''}><summary>${g}</summary>`;
+    for (const [k, label, mn, mx, st, rs] of items){
+      h += `<div class="row"><label for="p_${k}">${label}${rs ? ' ※' : ''}</label><output id="o_${k}">${P[k]}</output><input type="range" id="p_${k}" min="${mn}" max="${mx}" step="${st}" value="${P[k]}"></div>`;
+    }
+    h += `</details>`;
+  });
+  h += `<div class="note">※ はリセット時に反映されます</div><button id="reset">リセット</button>`;
+  el.innerHTML = h;
+  for (const [, items] of PARAM_DEFS) for (const [k] of items){
+    const inp = document.getElementById('p_'+k), o = document.getElementById('o_'+k);
+    inp.oninput = () => { P[k] = parseFloat(inp.value); o.textContent = inp.value; };
+  }
+  document.getElementById('reset').onclick = restart;
+}
+
+// ===== 操作 =====
+const bPause = document.getElementById('bPause'), bSpeed = document.getElementById('bSpeed'), bFast = document.getElementById('bFast'), bPanel = document.getElementById('bPanel');
+bPause.onclick = () => { paused = !paused; bPause.textContent = paused ? '▶' : '❚❚'; bPause.classList.toggle('on', paused); };
+bSpeed.onclick = () => { speedIdx = (speedIdx+1) % SPEEDS.length; bSpeed.textContent = SPEEDS[speedIdx] + 'x'; };
+bFast.onclick = () => { fast = !fast; bFast.classList.toggle('on', fast); document.getElementById('fast').style.display = fast ? 'block' : 'none'; };
+bPanel.onclick = () => { const p = document.getElementById('panel'); p.classList.toggle('open'); bPanel.classList.toggle('on', p.classList.contains('open')); };
+
+const ptrs = new Map();
+let dragMoved = false, pinch0 = null;
+function screenToWorld(sx, sy){ return [cam.x + sx/cam.z, cam.y + sy/cam.z]; }
+function zoomAt(sx, sy, f){
+  const [wx, wy] = screenToWorld(sx, sy);
+  cam.z = Math.max(0.05, Math.min(8, cam.z*f));
+  cam.x = wx - sx/cam.z; cam.y = wy - sy/cam.z;
+}
+cv.addEventListener('pointerdown', e => {
+  cv.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId, {x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY});
+  if (ptrs.size === 1) dragMoved = false;
+  if (ptrs.size === 2){ const [a, b] = [...ptrs.values()]; pinch0 = {d: Math.hypot(a.x-b.x, a.y-b.y)}; dragMoved = true; }
+});
+cv.addEventListener('pointermove', e => {
+  const p = ptrs.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  if (ptrs.size === 1){
+    if (Math.hypot(p.x-p.sx, p.y-p.sy) > 6) dragMoved = true;
+    if (dragMoved){ cam.x -= dx/cam.z; cam.y -= dy/cam.z; }
+  } else if (ptrs.size === 2 && pinch0){
+    const [a, b] = [...ptrs.values()], d = Math.hypot(a.x-b.x, a.y-b.y);
+    zoomAt((a.x+b.x)/2, (a.y+b.y)/2, d/pinch0.d); pinch0.d = d;
+    cam.x -= dx/2/cam.z; cam.y -= dy/2/cam.z;
+  }
+});
+function endPtr(e){
+  const p = ptrs.get(e.pointerId);
+  if (p && ptrs.size === 1 && !dragMoved) selectAt(e.clientX, e.clientY);
+  ptrs.delete(e.pointerId);
+  if (ptrs.size < 2) pinch0 = null;
+}
+cv.addEventListener('pointerup', endPtr);
+cv.addEventListener('pointercancel', e => { ptrs.delete(e.pointerId); pinch0 = null; });
+cv.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY*0.0015)); }, {passive: false});
+function selectAt(sx, sy){
+  const [wx, wy] = screenToWorld(sx, sy);
+  let best = null, bd = (14/cam.z)**2;
+  for (const c of creatures){ const dx = c.x-wx, dy = c.y-wy, d = dx*dx+dy*dy - c.rad*c.rad; if (d < bd){ bd = d; best = c; } }
+  selected = best;
+  info.style.display = best ? 'block' : 'none';
+  if (best) updateInfo();
+}
+addEventListener('resize', () => { resize(); });
+
+// ===== ループ =====
+let last = performance.now(), acc = 0, frame = 0;
+function loop(now){
+  const el = Math.min(0.1, (now-last)/1000); last = now;
+  if (!paused){
+    if (fast){
+      const t0 = performance.now();
+      while (performance.now() - t0 < 28) step();
+    } else {
+      acc += el*SPEEDS[speedIdx];
+      let n = 0;
+      while (acc >= DT && n < 24){ step(); acc -= DT; n++; }
+      if (n >= 24) acc = 0;
+    }
+  }
+  if (!fast) draw();
+  else { ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle = '#15171b'; ctx.fillRect(0, 0, cv.width, cv.height); }
+  if (frame++ % 10 === 0){ updateHud(); updateInfo(); }
+  requestAnimationFrame(loop);
+}
+
+resize(); buildPanel(); restart();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
