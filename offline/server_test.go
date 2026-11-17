@@ -68,6 +68,27 @@ func TestServe(t *testing.T) {
 	}
 }
 
+func TestAlreadyRunning(t *testing.T) {
+	srv := httptest.NewServer(setup(t))
+	defer srv.Close()
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	if !alreadyRunning(port) {
+		t.Fatal("running launcher not detected")
+	}
+	// 無関係なサーバー（識別ヘッダなし）と、何も動いていないポートは false
+	other := httptest.NewServer(http.NotFoundHandler())
+	defer other.Close()
+	if alreadyRunning(other.Listener.Addr().(*net.TCPAddr).Port) {
+		t.Fatal("foreign server detected as launcher")
+	}
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	free := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	if alreadyRunning(free) {
+		t.Fatal("closed port detected as launcher")
+	}
+}
+
 func TestListenFallback(t *testing.T) {
 	l1, err := listenPreferred(28080, 5)
 	if err != nil {

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
-import { slugify, makeId, safeEntryPath, readZipEntries, extractZip, injectShim, LIMITS } from "./build.mjs";
+import { slugify, makeId, safeEntryPath, readZipEntries, extractZip, injectShim, build, LIMITS } from "./build.mjs";
 
 // テスト用の最小ZIPライター（任意の名前・属性を書ける）
 function makeZip(files, { symlink = false } = {}) {
@@ -81,4 +81,39 @@ test("injectShim keeps doctype first and bytes intact", () => {
   assert.ok(out.includes('<head><script>var id="abc";</script><meta'));
   assert.ok(out.includes("\x83\x41"));
   assert.equal(injectShim(Buffer.from("hello"), "a", "x").toString(), "<script>x</script>hello");
+});
+
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]);
+function buildIn(files) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bt-"));
+  const games = path.join(tmp, "games"), out = path.join(tmp, "dist");
+  fs.mkdirSync(games);
+  for (const [name, data] of Object.entries(files)) fs.writeFileSync(path.join(games, name), data);
+  const logs = [];
+  const r = build({ gamesDir: games, outDir: out, launcherDir: path.join(tmp, "none"), log: (m) => logs.push(m) });
+  return { ...r, out, logs };
+}
+
+test("single HTML: sidecar png/json become thumbnail and meta", () => {
+  const r = buildIn({ "a.html": "<title>T</title>", "a.png": PNG, "a.json": '{"title":"表示名","description":"説明"}', "b.html": "<title>B</title>" });
+  assert.deepEqual(r.errors, []);
+  const a = r.games.find((g) => g.id === "a"), b = r.games.find((g) => g.id === "b");
+  assert.equal(a.title, "表示名"); assert.equal(a.description, "説明");
+  assert.equal(a.thumbnail, "games/a/thumbnail.png");
+  assert.ok(fs.readFileSync(path.join(r.out, "games/a/thumbnail.png")).equals(PNG));
+  assert.equal(b.thumbnail, null);
+  assert.ok(!r.logs.some((l) => l.startsWith("skip:")), "sidecar files must not be reported as skipped");
+});
+
+test("sidecar: non-PNG is ignored with a warning", () => {
+  const r = buildIn({ "a.html": "<title>T</title>", "a.png": "not a png" });
+  assert.equal(r.games[0].thumbnail, null);
+  assert.ok(r.logs.some((l) => l.startsWith("warn:")));
+});
+
+test("title is decoded using meta charset", () => {
+  const sjis = Buffer.from([0x3c, 0x6d, 0x65, 0x74, 0x61, 0x20, 0x63, 0x68, 0x61, 0x72, 0x73, 0x65, 0x74, 0x3d, 0x73, 0x68, 0x69, 0x66, 0x74, 0x5f, 0x6a, 0x69, 0x73, 0x3e,
+    0x3c, 0x74, 0x69, 0x74, 0x6c, 0x65, 0x3e, 0x83, 0x65, 0x83, 0x58, 0x83, 0x67, 0x3c, 0x2f, 0x74, 0x69, 0x74, 0x6c, 0x65, 0x3e]);
+  const r = buildIn({ "s.html": sjis });
+  assert.equal(r.games[0].title, "テスト");
 });

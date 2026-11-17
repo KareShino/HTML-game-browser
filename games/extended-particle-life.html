@@ -1,0 +1,1158 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>拡張パーティクルライフ</title>
+<style>
+:root{--bg:#15171b;--panel:#1e2127;--panel2:#262a32;--line:#353a45;--fg:#dde1e8;--mut:#8b929c;--acc:#5aa0ff;--warn:#ffd966}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:13px/1.45 system-ui,-apple-system,"Hiragino Sans","Yu Gothic UI",Meiryo,sans-serif;overflow:hidden}
+#app{display:grid;grid-template-columns:minmax(0,1fr) clamp(360px,36vw,640px);height:100%}
+#left{display:flex;flex-direction:column;min-width:0;min-height:0}
+#pv{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:#0a0b0d;position:relative;overflow:hidden}
+#stage{position:relative}
+#cv{display:block;background:#000;touch-action:none}
+#brush{position:absolute;border:1px solid rgba(255,255,255,.5);border-radius:50%;pointer-events:none;display:none;transform:translate(-50%,-50%)}
+#bottom{flex:none;max-height:46%;overflow:auto;background:var(--panel);border-top:1px solid var(--line);padding:8px 12px}
+#right{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;padding:8px 12px 24px;min-height:0}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin:4px 0}
+.ff{display:inline-flex;align-items:center;gap:6px}
+.ff input[type=range]{flex:1;min-width:60px;accent-color:var(--acc)}
+.ff input[type=number]{width:84px}
+.ff .lb{white-space:nowrap}
+.col .ff{display:flex;width:100%}
+.col .ff input[type=range]{flex:1}
+button,select,input[type=text],input[type=number]{font:inherit;color:var(--fg);background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:3px 8px}
+input[type=number]{padding:3px 4px}
+button{cursor:pointer;white-space:nowrap}
+button:hover:not(:disabled){border-color:var(--acc)}
+button:disabled{opacity:.45;cursor:default}
+button.sm{padding:1px 8px}
+button.on{border-color:var(--acc);color:var(--acc)}
+details{border-top:1px solid var(--line);padding:2px 0}
+summary{cursor:pointer;font-weight:600;padding:6px 0}
+.help{color:var(--mut);cursor:help}
+.dim{color:var(--mut);font-size:12px}
+#msg{color:var(--warn);min-height:1.4em}
+.sw{display:inline-block;width:16px;height:16px;border-radius:3px;vertical-align:middle}
+.tblwrap{overflow-x:auto;margin:6px 0}
+table.t{border-collapse:collapse}
+table.t td,table.t th{border:1px solid var(--line);padding:0;text-align:center}
+table.t td.h,table.t th.h{position:sticky;left:0;background:var(--panel);z-index:1;padding:2px 4px}
+.wcell{width:46px;height:24px;border:0;background:transparent;text-align:center;padding:0;border-radius:0;cursor:ew-resize;-moz-appearance:textfield}
+.wcell::-webkit-outer-spin-button,.wcell::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.bcell{width:24px;height:22px;margin:2px;accent-color:var(--acc)}
+table.v{border-collapse:collapse;width:100%}
+table.v td,table.v th{border:1px solid var(--line);padding:2px 6px;text-align:left}
+table.v input[type=range]{width:100%;accent-color:var(--acc)}
+.pick{width:24px;height:20px;border-radius:3px;border:3px solid transparent;padding:0;cursor:pointer}
+.pick.sel{border-color:#fff}
+.ratio{display:inline-flex;align-items:center;gap:3px;margin-right:8px}
+.ratio input{width:56px}
+@media (max-width:820px){#app{grid-template-columns:1fr;grid-template-rows:60vh 1fr;overflow:auto}html,body{overflow:auto}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="left">
+    <div id="pv"><div id="stage"><canvas id="cv"></canvas><div id="brush"></div></div></div>
+    <div id="bottom"></div>
+  </div>
+  <div id="right"></div>
+</div>
+
+<script id="sim">
+'use strict';
+// ===== シミュレーション（ExtendetParticleLife の sim.cpp / render.cpp の色計算を移植）=====
+const MAX_TYPES = 24, MAX_BONDS = 4, MAX_P = 100000;
+const DEFAULT_PARAMS = {
+  rMax: 0.08, beta: 0.3, frictionHalfLife: 0.04, forceFactor: 10.0, bondLength: 0.015, springK: 300.0,
+  bondDist: 0.02, breakDist: 0.045, bondProb: 0.05, breakProb: 0.0005, thermal: 0.1, dt: 0.02,
+};
+
+function hash32(a) {
+  a ^= a >>> 16; a = Math.imul(a, 0x7feb352d);
+  a ^= a >>> 15; a = Math.imul(a, 0x846ca68b);
+  a ^= a >>> 16; return a >>> 0;
+}
+function hash3(a, b, c) { return hash32(a ^ hash32(b + 0x9e3779b9 + hash32(c))); }
+function u01(h) { return (h >>> 8) * (1 / 16777216); }
+
+// 種類 ID ごとの色: 色相 30 度刻み。13 種類目以降は周回ごとに明度を下げる
+function typeColor(t, sat, val) {
+  val *= Math.pow(0.55, Math.floor(t / 12));
+  const h = ((t * 30) % 360) / 60;
+  const c = val * sat, x = c * (1 - Math.abs((h % 2) - 1)), m = val - c;
+  let r = 0, g = 0, b = 0;
+  switch (Math.floor(h)) {
+    case 0: r = c; g = x; break;
+    case 1: r = x; g = c; break;
+    case 2: g = c; b = x; break;
+    case 3: g = x; b = c; break;
+    case 4: r = x; b = c; break;
+    default: r = c; b = x; break;
+  }
+  return [r + m, g + m, b + m];
+}
+
+class Simulation {
+  constructor() {
+    this.numTypes = 0;
+    this.weak = new Float32Array(MAX_TYPES * MAX_TYPES);      // weak[i*24+j]: 種類 i が j から受ける力
+    this.canBond = new Uint8Array(MAX_TYPES * MAX_TYPES);     // 対称
+    this.valence = new Uint8Array(MAX_TYPES);
+    this.p = Object.assign({}, DEFAULT_PARAMS);
+    this.world = 1.0;
+    this.n = 0;
+    this.x = new Float32Array(MAX_P); this.y = new Float32Array(MAX_P);
+    this.vx = new Float32Array(MAX_P); this.vy = new Float32Array(MAX_P);
+    this.type = new Uint8Array(MAX_P);
+    this.bonds = new Int32Array(MAX_P * MAX_BONDS).fill(-1);
+    this.bondCount = new Uint8Array(MAX_P);
+    this.stepCounter = 0;
+    // グリッド・作業領域
+    this.gridN = 1;
+    this.cellStart = new Int32Array(2); this.cellOf = new Int32Array(MAX_P); this.sorted = new Int32Array(MAX_P);
+    this.sx = new Float32Array(MAX_P); this.sy = new Float32Array(MAX_P); this.st = new Uint8Array(MAX_P);
+    this.ax = new Float32Array(MAX_P); this.ay = new Float32Array(MAX_P);
+    this.cutMask = new Uint8Array(MAX_P);
+    this.candI = new Int32Array(4096); this.candJ = new Int32Array(4096); this.candN = 0;
+    this.segB = new Int32Array(18); this.segE = new Int32Array(18);
+    this.segX = new Float64Array(18); this.segY = new Float64Array(18);
+  }
+
+  wd(d) { const h = 0.5 * this.world; if (d > h) d -= this.world; else if (d < -h) d += this.world; return d; }
+  wp(v) { v -= Math.floor(v / this.world) * this.world; return v >= this.world ? 0 : v; }
+
+  totalBonds() { let s = 0; for (let i = 0; i < this.n; i++) s += this.bondCount[i]; return s >> 1; }
+
+  addParticle(px, py, t, cap) {
+    const n = this.n;
+    if (n >= cap || n >= MAX_P || t < 0 || t >= this.numTypes) return false;
+    this.x[n] = this.wp(px); this.y[n] = this.wp(py);
+    this.vx[n] = 0; this.vy[n] = 0; this.type[n] = t;
+    this.bonds.fill(-1, n * MAX_BONDS, n * MAX_BONDS + MAX_BONDS);
+    this.bondCount[n] = 0;
+    this.n = n + 1;
+    return true;
+  }
+  clearParticles() { this.n = 0; }
+
+  removeParticles(mask) {
+    const n = this.n, newIdx = new Int32Array(n);
+    let w = 0;
+    for (let i = 0; i < n; i++) newIdx[i] = mask[i] ? -1 : w++;
+    if (w === n) return;
+    for (let i = 0; i < n; i++) {
+      const d = newIdx[i];
+      if (d < 0) continue;
+      this.x[d] = this.x[i]; this.y[d] = this.y[i]; this.vx[d] = this.vx[i]; this.vy[d] = this.vy[i];
+      this.type[d] = this.type[i];
+      let c = 0;
+      for (let s = 0; s < MAX_BONDS; s++) {
+        let j = this.bonds[i * MAX_BONDS + s];
+        if (j >= 0) j = newIdx[j];
+        if (j >= 0) c++;
+        this.bonds[d * MAX_BONDS + s] = j;
+      }
+      this.bondCount[d] = c;
+    }
+    this.n = w;
+  }
+  removeInRadius(cx, cy, r) {
+    const n = this.n, mask = new Uint8Array(n), r2 = r * r;
+    let any = false;
+    for (let i = 0; i < n; i++) {
+      const dx = this.wd(this.x[i] - cx), dy = this.wd(this.y[i] - cy);
+      if (dx * dx + dy * dy < r2) { mask[i] = 1; any = true; }
+    }
+    if (any) this.removeParticles(mask);
+  }
+
+  randomFill(total, ratios) {
+    this.clearParticles();
+    const nt = this.numTypes;
+    total = Math.min(total, MAX_P);
+    if (nt <= 0 || total <= 0) return;
+    let sum = 0;
+    for (let t = 0; t < nt; t++) sum += Math.max(0, ratios[t]);
+    const counts = new Array(nt).fill(0);
+    let assigned = 0;
+    for (let t = 0; t < nt; t++) {
+      const r = sum > 0 ? Math.max(0, ratios[t]) / sum : 1 / nt;
+      counts[t] = Math.floor(r * total); assigned += counts[t];
+    }
+    for (let t = 0; assigned < total; t = (t + 1) % nt) {
+      if (sum <= 0 || ratios[t] > 0) { counts[t]++; assigned++; }
+    }
+    for (let t = 0; t < nt; t++)
+      for (let k = 0; k < counts[t]; k++) this.addParticle(Math.random() * this.world, Math.random() * this.world, t, total);
+    const n = this.n;
+    for (let i = n - 1; i > 0; i--) {  // 種類ごとに並ばないようシャッフル（結合なしなので入れ替えのみ）
+      const j = Math.floor(Math.random() * (i + 1));
+      let tmp = this.x[i]; this.x[i] = this.x[j]; this.x[j] = tmp;
+      tmp = this.y[i]; this.y[i] = this.y[j]; this.y[j] = tmp;
+      tmp = this.type[i]; this.type[i] = this.type[j]; this.type[j] = tmp;
+    }
+  }
+
+  addType() {
+    if (this.numTypes >= MAX_TYPES) return false;
+    const t = this.numTypes++;
+    for (let k = 0; k < this.numTypes; k++) {
+      this.weak[t * MAX_TYPES + k] = 0; this.weak[k * MAX_TYPES + t] = 0;
+      this.canBond[t * MAX_TYPES + k] = 0; this.canBond[k * MAX_TYPES + t] = 0;
+    }
+    this.valence[t] = 0;
+    return true;
+  }
+  removeType(t) {
+    const nt = this.numTypes;
+    if (t < 0 || t >= nt || nt <= 1) return;
+    const n = this.n, mask = new Uint8Array(n);
+    for (let i = 0; i < n; i++) mask[i] = this.type[i] === t ? 1 : 0;
+    this.removeParticles(mask);
+    for (let i = 0; i < this.n; i++) if (this.type[i] > t) this.type[i]--;
+    for (let a = t; a < nt - 1; a++) this.valence[a] = this.valence[a + 1];
+    for (let a = 0; a < nt; a++) {
+      const sa = a < t ? a : a + 1;
+      if (sa >= nt) break;
+      for (let b = 0; b < nt; b++) {
+        const sb = b < t ? b : b + 1;
+        if (sb >= nt) break;
+        this.weak[a * MAX_TYPES + b] = this.weak[sa * MAX_TYPES + sb];
+        this.canBond[a * MAX_TYPES + b] = this.canBond[sa * MAX_TYPES + sb];
+      }
+    }
+    this.numTypes--;
+  }
+  setNumTypes(n) {
+    n = Math.min(MAX_TYPES, Math.max(1, n | 0));
+    while (this.numTypes > n) this.removeType(this.numTypes - 1);
+    while (this.numTypes < n) this.addType();
+  }
+  setCanBond(a, b, v) { this.canBond[a * MAX_TYPES + b] = this.canBond[b * MAX_TYPES + a] = v ? 1 : 0; }
+
+  randomizeWeak() {
+    for (let a = 0; a < this.numTypes; a++)
+      for (let b = 0; b < this.numTypes; b++) this.weak[a * MAX_TYPES + b] = Math.round((Math.random() * 2 - 1) * 100) / 100;
+  }
+  randomizeCanBond() {
+    for (let a = 0; a < this.numTypes; a++) for (let b = a; b < this.numTypes; b++) this.setCanBond(a, b, Math.random() < 0.5);
+  }
+  randomizeValence() {
+    for (let a = 0; a < this.numTypes; a++) this.valence[a] = Math.floor(Math.random() * (MAX_BONDS + 1));
+  }
+  randomizeParams() {
+    const p = this.p, U = Math.random;
+    const lin = (lo, hi) => lo + (hi - lo) * U();
+    const logu = (lo, hi) => lo * Math.pow(hi / lo, U());
+    const maxR = this.world * 0.45;
+    p.rMax = Math.min(logu(0.03, 0.15), maxR);
+    p.beta = lin(0.1, 0.5);
+    p.frictionHalfLife = logu(0.01, 0.2);
+    p.forceFactor = lin(2, 30);
+    p.bondLength = logu(0.005, 0.04);
+    p.springK = lin(50, 1000);
+    p.bondDist = Math.min(p.bondLength * lin(1, 1.8), maxR);
+    p.breakDist = p.bondDist * lin(1.5, 3);
+    p.bondProb = logu(0.005, 0.5);
+    p.breakProb = logu(1e-5, 1e-2);
+    p.thermal = lin(0, 0.5);
+  }
+
+  buildGrid() {
+    const n = this.n, p = this.p, world = this.world;
+    const cell = Math.min(Math.max(p.rMax, p.bondDist), world * 0.45);
+    const G = Math.max(1, Math.min(1024, Math.floor(world / cell)));
+    this.gridN = G;
+    const cells = G * G, invCell = G / world;
+    if (this.cellStart.length < cells + 1) this.cellStart = new Int32Array(cells + 1);
+    const cs = this.cellStart; cs.fill(0, 0, cells + 1);
+    const cellOf = this.cellOf, x = this.x, y = this.y;
+    for (let i = 0; i < n; i++) {
+      let cx = (x[i] * invCell) | 0, cy = (y[i] * invCell) | 0;
+      if (cx > G - 1) cx = G - 1; else if (cx < 0) cx = 0;
+      if (cy > G - 1) cy = G - 1; else if (cy < 0) cy = 0;
+      const c = cx + cy * G;
+      cellOf[i] = c; cs[c + 1]++;
+    }
+    for (let c = 0; c < cells; c++) cs[c + 1] += cs[c];
+    const cursor = this._cursor && this._cursor.length >= cells ? this._cursor : (this._cursor = new Int32Array(cells));
+    for (let c = 0; c < cells; c++) cursor[c] = cs[c];
+    const sorted = this.sorted, sx = this.sx, sy = this.sy, st = this.st, type = this.type;
+    for (let i = 0; i < n; i++) {
+      const k = cursor[cellOf[i]]++;
+      sorted[k] = i; sx[k] = x[i]; sy[k] = y[i]; st[k] = type[i];
+    }
+  }
+
+  // セル (cx,cy) の周囲 3x3 を、行ごとの連続区間 + 折り返し用の座標シフトで表す
+  buildSegs(cx, cy, generic) {
+    const G = this.gridN, cs = this.cellStart, W = this.world;
+    const B = this.segB, E = this.segE, X = this.segX, Y = this.segY;
+    let ns = 0;
+    if (generic) {
+      const nb = [];
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const cc = (cx + dx + G) % G + ((cy + dy + G) % G) * G;
+        if (nb.indexOf(cc) < 0) nb.push(cc);
+      }
+      for (const cc of nb) { B[ns] = cs[cc]; E[ns] = cs[cc + 1]; X[ns] = 0; Y[ns] = 0; ns++; }
+      return ns;
+    }
+    for (let dy = -1; dy <= 1; dy++) {
+      let ry = cy + dy, shy = 0;
+      if (ry < 0) { ry += G; shy = -W; } else if (ry >= G) { ry -= G; shy = W; }
+      const row = ry * G;
+      if (cx >= 1 && cx + 1 < G) {
+        B[ns] = cs[row + cx - 1]; E[ns] = cs[row + cx + 2]; X[ns] = 0; Y[ns] = shy; ns++;
+      } else if (cx === 0) {
+        B[ns] = cs[row]; E[ns] = cs[row + 2]; X[ns] = 0; Y[ns] = shy; ns++;
+        B[ns] = cs[row + G - 1]; E[ns] = cs[row + G]; X[ns] = -W; Y[ns] = shy; ns++;
+      } else {
+        B[ns] = cs[row + G - 2]; E[ns] = cs[row + G]; X[ns] = 0; Y[ns] = shy; ns++;
+        B[ns] = cs[row]; E[ns] = cs[row + 1]; X[ns] = W; Y[ns] = shy; ns++;
+      }
+    }
+    return ns;
+  }
+
+  step() {
+    this.stepCounter++;
+    const n = this.n;
+    if (n === 0) return;
+    this.buildGrid();
+    const p = this.p, world = this.world, G = this.gridN;
+    const rMax = Math.min(p.rMax, world * 0.45), rMax2 = rMax * rMax, invR = 1 / rMax;
+    const beta = Math.min(0.99, Math.max(0.01, p.beta)), invBeta = 1 / beta, inv1mb = 1 / (1 - beta);
+    const ff = rMax * p.forceFactor;
+    const bondD2 = p.bondDist * p.bondDist;
+    const kSpring = p.springK, L = p.bondLength;
+    const bondThresh = Math.floor(Math.min(1, Math.max(0, p.bondProb)) * 16777216);
+    const seed = hash32(Math.imul(this.stepCounter, 2654435761));
+    const generic = G < 3;
+    const x = this.x, y = this.y, sx = this.sx, sy = this.sy, st = this.st, sorted = this.sorted, cellOf = this.cellOf;
+    const cs = this.cellStart, weak = this.weak, canBond = this.canBond, valence = this.valence;
+    const bonds = this.bonds, bondCount = this.bondCount, ax = this.ax, ay = this.ay, type = this.type;
+    const segB = this.segB, segE = this.segE, segX = this.segX, segY = this.segY;
+    const half = 0.5 * world;
+    this.candN = 0;
+    let candI = this.candI, candJ = this.candJ, candN = 0;
+
+    const cells = G * G;
+    for (let c = 0; c < cells; c++) {
+      const kb = cs[c], ke = cs[c + 1];
+      if (kb === ke) continue;
+      const ns = this.buildSegs(c % G, (c / G) | 0, generic);
+      for (let kk = kb; kk < ke; kk++) {
+        const i = sorted[kk];
+        const xi = sx[kk], yi = sy[kk], ti = st[kk], wrow = ti * MAX_TYPES;
+        const bc = bondCount[i];
+        const iHasBond = bc > 0;
+        const iFree = bc < valence[ti] && bondThresh > 0;
+        const bi = i * MAX_BONDS;
+        const b0 = bonds[bi], b1 = bonds[bi + 1], b2 = bonds[bi + 2], b3 = bonds[bi + 3];
+        let fx = 0, fy = 0;
+        for (let q = 0; q < ns; q++) {
+          const end = segE[q], ox = segX[q] - xi, oy = segY[q] - yi;
+          for (let m = segB[q]; m < end; m++) {
+            let ddx = sx[m] + ox, ddy = sy[m] + oy;
+            if (generic) {
+              if (ddx > half) ddx -= world; else if (ddx < -half) ddx += world;
+              if (ddy > half) ddy -= world; else if (ddy < -half) ddy += world;
+            }
+            const d2 = ddx * ddx + ddy * ddy;
+            if (d2 < rMax2 && d2 > 1e-12) {
+              const d = Math.sqrt(d2), r = d * invR;
+              let f = r < beta ? r * invBeta - 1 : weak[wrow + st[m]] * (1 - Math.abs(2 * r - 1 - beta) * inv1mb);
+              if (iHasBond && f > 0) {  // 結合済みペアには引力側を働かせない
+                const j = sorted[m];
+                if (j === b0 || j === b1 || j === b2 || j === b3) f = 0;
+              }
+              const s = f / d;
+              fx += ddx * s; fy += ddy * s;
+            }
+            if (iFree && d2 < bondD2) {
+              const j = sorted[m], tj = st[m];
+              if (j > i && canBond[ti * MAX_TYPES + tj] && bondCount[j] < valence[tj] &&
+                  !(j === b0 || j === b1 || j === b2 || j === b3) &&
+                  (hash3(seed, i, j) >>> 8) < bondThresh) {
+                if (candN >= candI.length) {
+                  const ni = new Int32Array(candI.length * 2), nj = new Int32Array(candI.length * 2);
+                  ni.set(candI); nj.set(candJ); candI = this.candI = ni; candJ = this.candJ = nj;
+                }
+                candI[candN] = i; candJ[candN] = j; candN++;
+              }
+            }
+          }
+        }
+        fx *= ff; fy *= ff;
+        if (iHasBond) {  // バネ力
+          for (let s = 0; s < MAX_BONDS; s++) {
+            const j = bonds[bi + s];
+            if (j < 0) continue;
+            let ddx = x[j] - xi, ddy = y[j] - yi;
+            if (ddx > half) ddx -= world; else if (ddx < -half) ddx += world;
+            if (ddy > half) ddy -= world; else if (ddy < -half) ddy += world;
+            const d = Math.sqrt(ddx * ddx + ddy * ddy);
+            if (d < 1e-7) continue;
+            const fs = kSpring * (d - L) / d;
+            fx += ddx * fs; fy += ddy * fs;
+          }
+        }
+        ax[i] = fx; ay[i] = fy;
+      }
+    }
+    this.candN = candN;
+
+    // 積分（摩擦・熱ゆらぎ）
+    const dt = p.dt;
+    const fric = Math.pow(0.5, dt / Math.max(1e-4, p.frictionHalfLife));
+    const noise = p.thermal * Math.sqrt(dt) * 3.4641016;  // 一様乱数 [-0.5,0.5) * sqrt(12) で分散 1
+    const seed2 = hash32(seed + 0x1234567);
+    const vx = this.vx, vy = this.vy;
+    for (let i = 0; i < n; i++) {
+      let nx = 0, ny = 0;
+      if (noise > 0) {
+        const h = hash3(seed2, i, 0);
+        nx = (u01(h) - 0.5) * noise; ny = (u01(hash32(h)) - 0.5) * noise;
+      }
+      let nvx = vx[i] * fric + ax[i] * dt + nx, nvy = vy[i] * fric + ay[i] * dt + ny;
+      if (!(Math.abs(nvx) < 1e7)) nvx = 0;  // 発散した値は捨てる（NaN で壊れないように）
+      if (!(Math.abs(nvy) < 1e7)) nvy = 0;
+      vx[i] = nvx; vy[i] = nvy;
+      x[i] = this.wp(x[i] + nvx * dt);
+      y[i] = this.wp(y[i] + nvy * dt);
+    }
+
+    this.formBonds();
+    this.breakBonds();
+  }
+
+  isBonded(i, j) {
+    const b = this.bonds, o = i * MAX_BONDS;
+    return b[o] === j || b[o + 1] === j || b[o + 2] === j || b[o + 3] === j;
+  }
+  formBonds() {
+    const bonds = this.bonds, bc = this.bondCount, val = this.valence, type = this.type;
+    for (let c = 0; c < this.candN; c++) {
+      const i = this.candI[c], j = this.candJ[c];
+      if (bc[i] >= val[type[i]] || bc[j] >= val[type[j]] || this.isBonded(i, j)) continue;
+      for (let s = 0; s < MAX_BONDS; s++) if (bonds[i * MAX_BONDS + s] < 0) { bonds[i * MAX_BONDS + s] = j; break; }
+      for (let s = 0; s < MAX_BONDS; s++) if (bonds[j * MAX_BONDS + s] < 0) { bonds[j * MAX_BONDS + s] = i; break; }
+      bc[i]++; bc[j]++;
+    }
+  }
+  unlink(i, slot) {
+    const bonds = this.bonds, j = bonds[i * MAX_BONDS + slot];
+    if (j < 0) return;
+    bonds[i * MAX_BONDS + slot] = -1;
+    this.bondCount[i]--;
+    for (let s = 0; s < MAX_BONDS; s++)
+      if (bonds[j * MAX_BONDS + s] === i) { bonds[j * MAX_BONDS + s] = -1; this.bondCount[j]--; break; }
+  }
+  breakBonds() {
+    const n = this.n, p = this.p, bd2 = p.breakDist * p.breakDist;
+    const thresh = Math.floor(Math.min(1, Math.max(0, p.breakProb)) * 16777216);
+    const seed = hash32(Math.imul(this.stepCounter, 0x85ebca6b) + 77);
+    const x = this.x, y = this.y, type = this.type, bonds = this.bonds, bcnt = this.bondCount, cut = this.cutMask;
+    const canBond = this.canBond, val = this.valence;
+    cut.fill(0, 0, n);
+    // 判定は読み取りのみ。ペアは小さい方の添字側で 1 回だけ判定し、スロットごとのビットに記録
+    for (let i = 0; i < n; i++) {
+      if (!bcnt[i]) continue;
+      const ti = type[i];
+      let mask = 0;
+      for (let s = 0; s < MAX_BONDS; s++) {
+        const j = bonds[i * MAX_BONDS + s];
+        if (j < i) continue;
+        const dx = this.wd(x[j] - x[i]), dy = this.wd(y[j] - y[i]);
+        if (dx * dx + dy * dy > bd2 || !canBond[ti * MAX_TYPES + type[j]] ||
+            (thresh > 0 && (hash3(seed, i, j) >>> 8) < thresh)) mask |= 1 << s;
+      }
+      cut[i] = mask;
+    }
+    for (let i = 0; i < n; i++) {
+      if (cut[i]) for (let s = 0; s < MAX_BONDS; s++) if (cut[i] & (1 << s)) this.unlink(i, s);
+      for (let s = MAX_BONDS - 1; s >= 0 && bcnt[i] > val[type[i]]; s--) this.unlink(i, s);  // 価数超過は常に切る
+    }
+  }
+}
+</script>
+
+<script id="ui">
+'use strict';
+// ===== 描画 =====
+class GLRenderer {
+  constructor(canvas) {
+    const gl = canvas.getContext('webgl', { alpha: false, antialias: false, powerPreference: 'high-performance' });
+    if (!gl) throw new Error('no webgl');
+    this.gl = gl;
+    const vs = `attribute vec3 aP; uniform float uInvWorld, uSize; uniform vec3 uPal[${MAX_TYPES}]; varying vec3 vC;
+void main(){ vec2 p=aP.xy*uInvWorld; gl_Position=vec4(p.x*2.0-1.0,1.0-p.y*2.0,0.0,1.0); gl_PointSize=uSize; vC=uPal[int(aP.z+0.5)]; }`;
+    const fs = `precision mediump float; varying vec3 vC; uniform float uRound, uAlpha;
+void main(){ if(uRound>0.5){ vec2 d=gl_PointCoord*2.0-1.0; float r2=dot(d,d); if(r2>1.0) discard; gl_FragColor=vec4(vC*(1.0-0.25*r2),uAlpha);} else gl_FragColor=vec4(vC,uAlpha); }`;
+    const sh = (k, s) => { const o = gl.createShader(k); gl.shaderSource(o, s); gl.compileShader(o);
+      if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+    const prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+    this.prog = prog;
+    this.u = {}; for (const n of ['uInvWorld', 'uSize', 'uPal', 'uRound', 'uAlpha']) this.u[n] = gl.getUniformLocation(prog, n);
+    this.loc = gl.getAttribLocation(prog, 'aP');
+    this.buf = gl.createBuffer();
+    this.pts = new Float32Array(3 * 1024); this.lines = new Float32Array(6 * 1024);
+    this.maxPoint = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1] || 64;
+    this.kind = 'WebGL';
+  }
+  draw(sim, side, dpr, pointPx, showBonds, sat, val) {
+    const gl = this.gl, n = sim.n;
+    gl.viewport(0, 0, side, side);
+    gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(this.prog);
+    const pal = new Float32Array(MAX_TYPES * 3);
+    for (let t = 0; t < MAX_TYPES; t++) pal.set(typeColor(t, sat, val), t * 3);
+    gl.uniform3fv(this.u.uPal, pal);
+    gl.uniform1f(this.u.uInvWorld, 1 / sim.world);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
+    gl.enableVertexAttribArray(this.loc);
+    gl.vertexAttribPointer(this.loc, 3, gl.FLOAT, false, 12, 0);
+
+    if (showBonds) {
+      const W = sim.world, H = 0.5 * W, x = sim.x, y = sim.y, type = sim.type, bonds = sim.bonds;
+      if (this.lines.length < n * 4 * 3 * 2) this.lines = new Float32Array(n * 4 * 3 * 2 + 3072);
+      const L = this.lines; let k = 0;
+      for (let i = 0; i < n; i++) {
+        if (!sim.bondCount[i]) continue;
+        const t = type[i];
+        for (let s = 0; s < MAX_BONDS; s++) {
+          const j = bonds[i * MAX_BONDS + s];
+          if (j <= i) continue;
+          let dx = x[j] - x[i], dy = y[j] - y[i];
+          if (Math.abs(dx) <= H && Math.abs(dy) <= H) {
+            L[k++] = x[i]; L[k++] = y[i]; L[k++] = t; L[k++] = x[j]; L[k++] = y[j]; L[k++] = t;
+          } else {  // 境界をまたぐ結合は両側に描く（はみ出しはビューポートで切れる）
+            if (dx > H) dx -= W; else if (dx < -H) dx += W;
+            if (dy > H) dy -= W; else if (dy < -H) dy += W;
+            L[k++] = x[i]; L[k++] = y[i]; L[k++] = t; L[k++] = x[i] + dx; L[k++] = y[i] + dy; L[k++] = t;
+            L[k++] = x[j]; L[k++] = y[j]; L[k++] = t; L[k++] = x[j] - dx; L[k++] = y[j] - dy; L[k++] = t;
+          }
+        }
+      }
+      if (k > 0) {
+        gl.bufferData(gl.ARRAY_BUFFER, L.subarray(0, k), gl.STREAM_DRAW);
+        gl.uniform1f(this.u.uRound, 0); gl.uniform1f(this.u.uAlpha, 150 / 255); gl.uniform1f(this.u.uSize, 1);
+        gl.drawArrays(gl.LINES, 0, k / 3);
+      }
+    }
+    if (n > 0) {
+      if (this.pts.length < n * 3) this.pts = new Float32Array(n * 3 + 3072);
+      const P = this.pts, x = sim.x, y = sim.y, type = sim.type;
+      for (let i = 0, k = 0; i < n; i++) { P[k++] = x[i]; P[k++] = y[i]; P[k++] = type[i]; }
+      gl.bufferData(gl.ARRAY_BUFFER, P.subarray(0, n * 3), gl.STREAM_DRAW);
+      gl.uniform1f(this.u.uRound, 1); gl.uniform1f(this.u.uAlpha, 1);
+      gl.uniform1f(this.u.uSize, Math.min(this.maxPoint, Math.max(1.5, pointPx * dpr / sim.world)));
+      gl.drawArrays(gl.POINTS, 0, n);
+    }
+  }
+}
+
+class Canvas2DRenderer {
+  constructor(canvas) { this.ctx = canvas.getContext('2d', { alpha: false }); this.kind = 'Canvas2D'; this.idx = new Int32Array(1024); }
+  draw(sim, side, dpr, pointPx, showBonds, sat, val) {
+    const ctx = this.ctx, n = sim.n, k = side / sim.world;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, side, side);
+    const col = t => { const c = typeColor(t, sat, val); return [Math.round(c[0] * 255), Math.round(c[1] * 255), Math.round(c[2] * 255)]; };
+    const x = sim.x, y = sim.y, type = sim.type;
+    // 種類ごとにまとめて描く
+    const start = new Int32Array(MAX_TYPES + 1);
+    for (let i = 0; i < n; i++) start[type[i] + 1]++;
+    for (let t = 0; t < MAX_TYPES; t++) start[t + 1] += start[t];
+    if (this.idx.length < n) this.idx = new Int32Array(n + 1024);
+    const cur = start.slice(0, MAX_TYPES), idx = this.idx;
+    for (let i = 0; i < n; i++) idx[cur[type[i]]++] = i;
+    if (showBonds) {
+      const W = sim.world, H = 0.5 * W;
+      ctx.lineWidth = 1;
+      for (let t = 0; t < sim.numTypes; t++) {
+        const c = col(t);
+        ctx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},0.59)`; ctx.beginPath();
+        for (let q = start[t]; q < start[t + 1]; q++) {
+          const i = idx[q];
+          if (!sim.bondCount[i]) continue;
+          for (let s = 0; s < MAX_BONDS; s++) {
+            const j = sim.bonds[i * MAX_BONDS + s];
+            if (j <= i) continue;
+            let dx = x[j] - x[i], dy = y[j] - y[i];
+            if (Math.abs(dx) <= H && Math.abs(dy) <= H) { ctx.moveTo(x[i] * k, y[i] * k); ctx.lineTo(x[j] * k, y[j] * k); }
+            else {
+              if (dx > H) dx -= W; else if (dx < -H) dx += W;
+              if (dy > H) dy -= W; else if (dy < -H) dy += W;
+              ctx.moveTo(x[i] * k, y[i] * k); ctx.lineTo((x[i] + dx) * k, (y[i] + dy) * k);
+              ctx.moveTo(x[j] * k, y[j] * k); ctx.lineTo((x[j] - dx) * k, (y[j] - dy) * k);
+            }
+          }
+        }
+        ctx.stroke();
+      }
+    }
+    const size = Math.max(1.5, pointPx * dpr / sim.world), rad = size / 2;
+    for (let t = 0; t < sim.numTypes; t++) {
+      const c = col(t);
+      ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
+      if (rad <= 1.5) {
+        for (let q = start[t]; q < start[t + 1]; q++) { const i = idx[q]; ctx.fillRect(x[i] * k - rad, y[i] * k - rad, size, size); }
+      } else {
+        ctx.beginPath();
+        for (let q = start[t]; q < start[t + 1]; q++) { const i = idx[q]; const px = x[i] * k, py = y[i] * k; ctx.moveTo(px + rad, py); ctx.arc(px, py, rad, 0, 6.2831853); }
+        ctx.fill();
+      }
+    }
+  }
+}
+
+// ===== アプリ状態 =====
+const sim = new Simulation();
+const st = {
+  cap: 4000, mode: 1, brushType: 0, brushRadius: 0.02, brushRate: 4, ratios: new Array(MAX_TYPES).fill(1),
+  paused: false, speed: 1, stepAcc: 0, worldEdit: 1, numTypesEdit: 3, simMs: 0, fps: 0,
+  sat: 0.75, val: 0.95, pointPx: 4, showBonds: true,
+  presetName: '', presetSel: '', msg: '', renderer: 'auto',
+};
+const KMAX_STEPS = 200;
+const $ = id => document.getElementById(id);
+const maxR = () => sim.world * 0.45;
+
+function h(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  if (props) for (const k in props) {
+    const v = props[k];
+    if (k === 'class') e.className = v;
+    else if (k === 'style') e.style.cssText = v;
+    else if (k.startsWith('on')) e[k] = v;
+    else if (k === 'value' || k === 'checked' || k === 'disabled') e[k] = v;
+    else e.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) e.append(c.nodeType ? c : String(c));
+  return e;
+}
+const fmtG = v => String(+Number(v).toPrecision(6));
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const refreshers = [];
+const refreshAll = () => { for (let i = refreshers.length - 1; i >= 0; i--) if (refreshers[i]() === false) refreshers.splice(i, 1); };
+function say(m) { st.msg = m; $('msg').textContent = m; }
+
+function swatch(t, size) {
+  const c = typeColor(t, st.sat, st.val);
+  const e = h('span', { class: 'sw', title: '種類 ' + t });
+  e.style.background = `rgb(${c.map(v => Math.round(v * 255)).join(',')})`;
+  if (size) { e.style.width = size + 'px'; e.style.height = size + 'px'; }
+  e._t = t; swatches.push(e);
+  return e;
+}
+let swatches = [];
+function recolorSwatches() {
+  for (const e of swatches) { if (!e.isConnected) continue; const c = typeColor(e._t, st.sat, st.val); e.style.background = `rgb(${c.map(v => Math.round(v * 255)).join(',')})`; }
+  swatches = swatches.filter(e => e.isConnected);
+}
+
+// ---- スライダー + 自由入力欄（範囲外の値も入力欄に直接書ける）----
+// o: {label, get, set, smin, smax, hmin, hmax, dec, log, int, commit, help, cls}
+function freeNum(o) {
+  const val = x => typeof x === 'function' ? x() : x;
+  const sl = h('input', { type: 'range', min: 0, max: 1000, step: 1 });
+  const num = h('input', { type: 'number', step: 'any' });
+  const wrap = h('span', { class: 'ff' }, sl, num, h('span', { class: 'lb' }, o.label), o.help ? h('span', { class: 'help', title: o.help }, '(?)') : null);
+  if (o.width) sl.style.maxWidth = o.width + 'px';
+  const toPos = v => {
+    const a = val(o.smin), b = val(o.smax);
+    if (!(b > a)) return 0;
+    let t;
+    if (o.log) {
+      if (a > 0) t = (Math.log(Math.max(v, a)) - Math.log(a)) / (Math.log(b) - Math.log(a));
+      else { const eps = b * 1e-4; t = v <= 0 ? 0 : (Math.log(Math.max(v, eps)) - Math.log(eps)) / (Math.log(b) - Math.log(eps)); }
+    } else t = (v - a) / (b - a);
+    return Math.round(clamp(t, 0, 1) * 1000);
+  };
+  const fromPos = p => {
+    const a = val(o.smin), b = val(o.smax), t = p / 1000;
+    let v;
+    if (o.log) {
+      if (a > 0) v = a * Math.pow(b / a, t);
+      else { const eps = b * 1e-4; v = t === 0 ? 0 : eps * Math.pow(b / eps, t); }
+    } else v = a + (b - a) * t;
+    return v;
+  };
+  const norm = v => { v = o.int ? Math.round(v) : +v.toFixed(o.dec == null ? 4 : o.dec); return clamp(v, val(o.hmin), val(o.hmax)); };
+  let seen = false;
+  const refresh = () => {
+    if (sl.isConnected) seen = true; else if (seen) return false;  // 作り直されて外れたコントロールは更新対象から外す
+    const v = o.get();
+    sl.value = toPos(v);
+    if (document.activeElement !== num) num.value = fmtG(v);
+  };
+  const after = () => { if (o.after) o.after(); };
+  sl.oninput = () => { o.set(norm(fromPos(+sl.value))); after(); refresh(); num.value = fmtG(o.get()); };
+  sl.onchange = () => { if (o.commit) o.commit(); };
+  num.oninput = () => { const v = parseFloat(num.value); if (Number.isFinite(v)) { o.set(norm(v)); after(); sl.value = toPos(o.get()); } };
+  num.onchange = () => {
+    const v = parseFloat(num.value);
+    if (Number.isFinite(v)) { o.set(norm(v)); after(); }
+    num.value = fmtG(o.get()); sl.value = toPos(o.get());
+    if (o.commit) o.commit();
+  };
+  refreshers.push(refresh); refresh();
+  return wrap;
+}
+
+function button(label, fn, cls) { return h('button', { class: cls || '', onclick: fn }, label); }
+function details(title, open, ...kids) {
+  const d = h('details', null, h('summary', null, title), ...kids);
+  if (open) d.open = true;
+  return d;
+}
+function help(text) { return h('span', { class: 'help', title: text }, '(?)'); }
+
+// ===== プリセット（localStorage + JSON 入出力）=====
+const STORE_KEY = 'epl.presets.v1';
+const PARAM_KEYS = ['rMax', 'beta', 'frictionHalfLife', 'forceFactor', 'bondLength', 'springK', 'bondDist', 'breakDist', 'bondProb', 'breakProb', 'thermal'];
+function readStore() {
+  try { const o = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; }
+}
+function writeStore(o) {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(o)); return true; } catch (e) { return false; }
+}
+function validName(n) {
+  if (!n || n.length > 120) return false;
+  for (let i = 0; i < n.length; i++) if (n.charCodeAt(i) < 32 || '<>:"/\\|?*'.includes(n[i])) return false;
+  return n !== '.' && n !== '..';
+}
+function snapshotPreset(name) {
+  const n = sim.numTypes, weak = [], canBond = [];
+  for (let a = 0; a < n; a++) {
+    weak.push(Array.from({ length: n }, (_, b) => +sim.weak[a * MAX_TYPES + b].toFixed(4)));
+    canBond.push(Array.from({ length: n }, (_, b) => sim.canBond[a * MAX_TYPES + b] ? 1 : 0));
+  }
+  const params = {}; for (const k of PARAM_KEYS) params[k] = sim.p[k];
+  return { app: 'extended-particle-life', version: 1, name, types: n, weak, canBond, valence: Array.from(sim.valence.subarray(0, n)), params };
+}
+// 検証して適用する。exe 形式（weak のみ）のプリセットも読める。失敗時は例外
+function applyPreset(j) {
+  if (!j || typeof j !== 'object') throw new Error('JSON がオブジェクトではありません');
+  const m = j.weak;
+  if (!Array.isArray(m)) throw new Error('weak がありません');
+  const n = m.length;
+  if (n < 1 || n > MAX_TYPES) throw new Error('種類数が範囲外 (1〜' + MAX_TYPES + ')');
+  for (const row of m) {
+    if (!Array.isArray(row) || row.length !== n) throw new Error('行列が正方でない');
+    for (const v of row) if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error('数値でない値があります');
+  }
+  let cb = null, val = null, pr = null;
+  if (j.canBond != null) {
+    if (!Array.isArray(j.canBond) || j.canBond.length !== n || j.canBond.some(r => !Array.isArray(r) || r.length !== n)) throw new Error('canBond の形が不正');
+    cb = j.canBond;
+  }
+  if (j.valence != null) {
+    if (!Array.isArray(j.valence) || j.valence.length !== n || j.valence.some(v => typeof v !== 'number' || !Number.isFinite(v))) throw new Error('valence の形が不正');
+    val = j.valence;
+  }
+  if (j.params != null) { if (typeof j.params !== 'object') throw new Error('params の形が不正'); pr = j.params; }
+  const before = sim.numTypes;
+  sim.setNumTypes(n);
+  for (let t = before; t < sim.numTypes; t++) st.ratios[t] = 1;
+  for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) sim.weak[a * MAX_TYPES + b] = clamp(m[a][b], -10, 10);
+  if (cb) for (let a = 0; a < n; a++) for (let b = a; b < n; b++) sim.setCanBond(a, b, !!(cb[a][b] || cb[b][a]));
+  if (val) for (let a = 0; a < n; a++) sim.valence[a] = clamp(Math.round(val[a]), 0, MAX_BONDS);
+  if (pr) for (const k of PARAM_KEYS) {
+    const def = PARAM_BOUNDS[k], v = pr[k];
+    if (typeof v === 'number' && Number.isFinite(v)) sim.p[k] = clamp(v, def[0], typeof def[1] === 'function' ? def[1]() : def[1]);
+  }
+  sim.p.breakDist = Math.max(sim.p.breakDist, sim.p.bondDist);
+  st.brushType = Math.min(st.brushType, sim.numTypes - 1);
+  st.numTypesEdit = sim.numTypes;
+  rebuildTypeUI();
+  return n;
+}
+
+// ===== パラメータ定義（UI の範囲）=====
+const PARAM_UI = [
+  { k: 'rMax', label: '最大距離', smin: 0.01, smax: () => Math.min(0.3, maxR()), hmin: 0.0005, hmax: maxR, dec: 4, log: true },
+  { k: 'beta', label: 'β', smin: 0.05, smax: 0.9, hmin: 0.01, hmax: 0.99, dec: 3, help: 'r/最大距離 が β 未満では全種類共通の斥力 (0.01〜0.99)' },
+  { k: 'frictionHalfLife', label: '摩擦(半減時間)', smin: 0.005, smax: 0.5, hmin: 0.0001, hmax: 1e6, dec: 4, log: true, help: '速度が半分になるまでの時間。小さいほど摩擦が強い' },
+  { k: 'forceFactor', label: '力の倍率', smin: 0, smax: 50, hmin: -1e5, hmax: 1e5, dec: 2 },
+  { k: 'bondLength', label: 'ボンド長', smin: 0.001, smax: 0.08, hmin: 0, hmax: 1e3, dec: 4, log: true },
+  { k: 'springK', label: 'バネ強度', smin: 0, smax: 2000, hmin: 0, hmax: 1e7, dec: 1, help: '大きすぎると数値的に不安定になります (目安: 2000 程度まで)' },
+  { k: 'bondDist', label: '結合距離', smin: 0.001, smax: 0.1, hmin: 0, hmax: maxR, dec: 4, log: true },
+  { k: 'breakDist', label: '切断距離', smin: 0.002, smax: 0.2, hmin: 0, hmax: 1e3, dec: 4, log: true },
+  { k: 'bondProb', label: '結合確率', smin: 0, smax: 1, hmin: 0, hmax: 1, dec: 5, log: true, help: '1 ステップあたり (0〜1)' },
+  { k: 'breakProb', label: '切断確率', smin: 0, smax: 0.1, hmin: 0, hmax: 1, dec: 6, log: true, help: '1 ステップあたり (0〜1)' },
+  { k: 'thermal', label: '熱ゆらぎ強度', smin: 0, smax: 2, hmin: 0, hmax: 1e4, dec: 3 },
+];
+const PARAM_BOUNDS = {}; for (const d of PARAM_UI) PARAM_BOUNDS[d.k] = [d.hmin, d.hmax];
+function afterParam() { sim.p.breakDist = Math.max(sim.p.breakDist, sim.p.bondDist); refreshAll(); }
+
+// ===== UI 構築 =====
+let weakHost, bondHost, valHost, ratioHost, pickHost, modeHost;
+
+function rebuildTypeUI() {
+  buildWeak(); buildBond(); buildValence(); buildPlacement();
+  refreshAll();
+}
+
+function downloadJson(name, obj) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  const a = h('a', { href: URL.createObjectURL(blob), download: name + '.json' });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function buildRight() {
+  const R = $('right'); R.textContent = '';
+  const status = h('div', { id: 'status' });
+  const perf = h('div', { id: 'perf' });
+  const pauseBtn = h('button', { id: 'pause', onclick: () => { st.paused = !st.paused; pauseBtn.textContent = st.paused ? '再開' : '一時停止'; } }, '一時停止');
+  const top = h('div', { class: 'row' }, pauseBtn, button('1x', () => { st.speed = 1; refreshAll(); }),
+    freeNum({ label: '再生速度(倍)', get: () => st.speed, set: v => st.speed = v, smin: 0.1, smax: 10, hmin: 0.01, hmax: KMAX_STEPS, dec: 2, log: true, width: 140,
+      help: '1倍 = 60ステップ/秒 (60Hz のとき 1フレームに1ステップ)。1未満は数フレームに1ステップ。入力欄では 0.01〜200 倍まで指定可' }));
+  const allRand = button('すべてランダム', () => { sim.randomizeWeak(); sim.randomizeCanBond(); sim.randomizeValence(); sim.randomizeParams(); refreshAll(); buildWeak(); buildBond(); buildValence(); });
+  allRand.title = '弱い力・結合可否・価数・共通パラメータをまとめてランダム化 (粒子はそのまま)';
+  R.append(status, perf, top, h('div', { class: 'row' }, allRand), h('div', { id: 'msg' }), h('hr', { style: 'border:0;border-top:1px solid var(--line)' }));
+
+  // 弱い力テーブル + プリセット
+  weakHost = h('div', { class: 'tblwrap' });
+  const nameIn = h('input', { type: 'text', placeholder: 'プリセット名', style: 'flex:1;min-width:120px', oninput: () => { st.presetName = nameIn.value; } });
+  const sel = h('select', { style: 'flex:1;min-width:120px', onchange: () => { st.presetSel = sel.value; syncPresetButtons(); } });
+  const loadBtn = button('読込', () => {
+    const o = readStore(), p = o[st.presetSel];
+    if (!p) return say('読込に失敗しました: ' + st.presetSel);
+    try { const n = applyPreset(p); nameIn.value = st.presetName = st.presetSel; say(`読み込みました: ${st.presetSel} (${n}種類)`); }
+    catch (e) { say('読込エラー: ' + e.message); }
+  });
+  const delBtn = button('削除', () => {
+    const o = readStore(); delete o[st.presetSel];
+    if (writeStore(o)) { say('削除しました: ' + st.presetSel); st.presetSel = ''; } else say('削除に失敗しました');
+    refreshPresetList();
+  });
+  const fileIn = h('input', { type: 'file', accept: '.json,application/json', style: 'display:none' });
+  fileIn.onchange = () => {
+    const f = fileIn.files[0]; fileIn.value = '';
+    if (!f) return;
+    if (f.size > 2e6) return say('読込エラー: ファイルが大きすぎます');
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const j = JSON.parse(String(rd.result));
+        const n = applyPreset(j);
+        const nm = validName(j.name) ? j.name : f.name.replace(/\.json$/i, '');
+        nameIn.value = st.presetName = validName(nm) ? nm : '';
+        say(`ファイルから読み込みました: ${f.name} (${n}種類)。必要なら「名前を付けて保存」でブラウザに保存できます`);
+      } catch (e) { say('読込エラー: ' + e.message); }
+    };
+    rd.onerror = () => say('読込エラー: ファイルを読めませんでした');
+    rd.readAsText(f);
+  };
+  function syncPresetButtons() { loadBtn.disabled = !st.presetSel; delBtn.disabled = !st.presetSel; }
+  function refreshPresetList() {
+    const names = Object.keys(readStore()).sort();
+    sel.textContent = '';
+    sel.append(h('option', { value: '' }, names.length ? '(プリセットを選択)' : '(保存済みプリセットなし)'));
+    for (const n of names) sel.append(h('option', { value: n }, n));
+    if (!names.includes(st.presetSel)) st.presetSel = '';
+    sel.value = st.presetSel; syncPresetButtons();
+  }
+  const saveBtn = button('名前を付けて保存', () => {
+    const name = nameIn.value.trim();
+    if (!validName(name)) return say('名前が不正です (空、または \\ / : * ? " < > | を含む)');
+    const o = readStore(); o[name] = snapshotPreset(name);
+    if (writeStore(o)) { st.presetSel = name; say('保存しました: ' + name); }
+    else say('ブラウザへの保存に失敗しました (保存が禁止されている可能性があります)。「JSONで書き出し」を使ってください');
+    refreshPresetList();
+  });
+  const expBtn = button('JSONで書き出し', () => {
+    const name = nameIn.value.trim() || 'particle-life-preset';
+    downloadJson(validName(name) ? name : 'particle-life-preset', snapshotPreset(validName(name) ? name : 'preset'));
+    say('書き出しました (ダウンロードフォルダを確認してください)');
+  });
+  const impBtn = button('JSONを読み込み', () => fileIn.click());
+  refreshPresetList();
+
+  R.append(details('弱い力テーブル', true,
+    h('div', { class: 'row' }, button('ランダム生成', () => { sim.randomizeWeak(); buildWeak(); }),
+      button('全て0', () => { for (let a = 0; a < sim.numTypes; a++) for (let b = 0; b < sim.numTypes; b++) sim.weak[a * MAX_TYPES + b] = 0; buildWeak(); }),
+      help('行 = 力を受ける種類、列 = 相手の種類。正 = 引力、負 = 斥力。\nセルを左右にドラッグ (-1〜1)、またはクリックして数値を直接入力 (-10〜10)')),
+    h('div', { class: 'row' }, nameIn, saveBtn),
+    h('div', { class: 'row' }, sel, loadBtn, delBtn),
+    h('div', { class: 'row' }, expBtn, impBtn, fileIn, help('プリセットは弱い力・結合可否・価数・共通パラメータを保存します。ブラウザ内 (localStorage) 保存のほか、JSON ファイルの書き出し/読み込みでバックアップや持ち運びができます。種類数はプリセットに合わせて増減します (減る場合は末尾の種類と粒子・結合を削除)')),
+    weakHost));
+  bondHost = h('div', { class: 'tblwrap' });
+  R.append(details('結合可否テーブル', true,
+    h('div', { class: 'row' }, button('ランダム', () => { sim.randomizeCanBond(); buildBond(); }, 'sm'),
+      button('全て可', () => { for (let a = 0; a < sim.numTypes; a++) for (let b = 0; b < sim.numTypes; b++) sim.canBond[a * MAX_TYPES + b] = 1; buildBond(); }, 'sm'),
+      button('全て不可', () => { sim.canBond.fill(0); buildBond(); }, 'sm'),
+      help('対称。チェックした種類の組み合わせが結合しうる\nランダム: 各組み合わせを 50% で可にする')),
+    bondHost));
+  valHost = h('div');
+  R.append(details('価数テーブル', true,
+    h('div', { class: 'row' }, button('ランダム', () => { sim.randomizeValence(); buildValence(); }, 'sm'),
+      button('＋種類を追加', () => { if (sim.addType()) { st.ratios[sim.numTypes - 1] = 1; st.numTypesEdit = sim.numTypes; rebuildTypeUI(); } else say('種類は最大 ' + MAX_TYPES + ' までです'); }, 'sm'),
+      help('価数は粒子あたりの結合スロット数 (0〜4)\nランダム: 種類ごとに 0〜4 の一様乱数\n追加した種類は力0・結合不可・価数0')),
+    valHost));
+  const pbox = h('div', { class: 'col' });
+  const pbtns = h('div', { class: 'row' }, button('ランダム', () => { sim.randomizeParams(); refreshAll(); }, 'sm'),
+    button('初期値に戻す', () => { Object.assign(sim.p, DEFAULT_PARAMS); refreshAll(); }, 'sm'),
+    help('ランダム: 各値を目安範囲内で生成 (結合距離 ≥ ボンド長、切断距離 > 結合距離 になるよう調整)。\n世界の広さ・再生速度は変えません'));
+  pbox.append(pbtns);
+  for (const d of PARAM_UI) pbox.append(h('div', { class: 'row' }, freeNum({ label: d.label, get: () => sim.p[d.k], set: v => sim.p[d.k] = v, after: afterParam,
+    smin: d.smin, smax: d.smax, hmin: d.hmin, hmax: d.hmax, dec: d.dec, log: d.log, help: d.help })));
+  pbox.append(h('div', { class: 'dim' }, '右の入力欄にはスライダー範囲外の値も直接入力できます'));
+  R.append(details('共通パラメータ', true, pbox));
+  const vbox = h('div', { class: 'col' },
+    h('div', { class: 'row' }, freeNum({ label: '彩度', get: () => st.sat, set: v => st.sat = v, smin: 0, smax: 1, hmin: 0, hmax: 1, dec: 2, after: recolorSwatches })),
+    h('div', { class: 'row' }, freeNum({ label: '明度', get: () => st.val, set: v => st.val = v, smin: 0.1, smax: 1, hmin: 0, hmax: 1, dec: 2, after: recolorSwatches })),
+    h('div', { class: 'row' }, freeNum({ label: '粒子サイズ(px)', get: () => st.pointPx, set: v => st.pointPx = v, smin: 1, smax: 16, hmin: 0.5, hmax: 256, dec: 1 })),
+    h('div', { class: 'row' }, h('label', null, h('input', { type: 'checkbox', checked: st.showBonds, onchange: e => { st.showBonds = e.target.checked; } }), ' 結合を表示')));
+  R.append(details('表示', false, vbox));
+  buildWeak(); buildBond(); buildValence();
+}
+
+function matrixTable(cellFn) {
+  const n = sim.numTypes;
+  const t = h('table', { class: 't' });
+  const head = h('tr', null, h('th', { class: 'h' }));
+  for (let b = 0; b < n; b++) head.append(h('th', null, swatch(b)));
+  t.append(head);
+  for (let a = 0; a < n; a++) {
+    const tr = h('tr', null, h('td', { class: 'h' }, swatch(a)));
+    for (let b = 0; b < n; b++) tr.append(h('td', null, cellFn(a, b)));
+    t.append(tr);
+  }
+  return t;
+}
+
+function buildWeak() {
+  weakHost.textContent = '';
+  weakHost.append(matrixTable((a, b) => {
+    const idx = a * MAX_TYPES + b;
+    const inp = h('input', { type: 'number', class: 'wcell', step: 0.01, min: -10, max: 10 });
+    const paint = () => {
+      const v = clamp(sim.weak[idx], -1, 1);
+      inp.parentElement && (inp.parentElement.style.background = v >= 0 ? `rgba(26,140,51,${0.15 + 0.6 * v})` : `rgba(166,31,31,${0.15 - 0.6 * v})`);
+    };
+    const sync = () => { if (document.activeElement !== inp) inp.value = (+sim.weak[idx]).toFixed(2); paint(); };
+    inp.oninput = () => { const v = parseFloat(inp.value); if (Number.isFinite(v)) { sim.weak[idx] = clamp(v, -10, 10); paint(); } };
+    inp.onchange = () => { sim.weak[idx] = clamp(parseFloat(inp.value) || 0, -10, 10); inp.value = (+sim.weak[idx]).toFixed(2); paint(); };
+    inp.onblur = () => { inp.value = (+sim.weak[idx]).toFixed(2); };
+    // マウス: 左右ドラッグで値を変える（動かさずに離すと入力モード）
+    inp.onmousedown = ev => {
+      if (ev.button !== 0 || document.activeElement === inp) return;
+      ev.preventDefault();
+      const x0 = ev.clientX; let moved = false, last = x0, v = sim.weak[idx];
+      const mv = e => {
+        if (Math.abs(e.clientX - x0) > 3) moved = true;
+        if (moved) { v = clamp(v + (e.clientX - last) * 0.01, -1, 1); sim.weak[idx] = Math.round(v * 100) / 100; sync(); }
+        last = e.clientX;
+      };
+      const up = () => { removeEventListener('mousemove', mv); removeEventListener('mouseup', up); if (!moved) { inp.focus(); inp.select(); } };
+      addEventListener('mousemove', mv); addEventListener('mouseup', up);
+    };
+    refreshers.push(() => { if (!inp.isConnected) return false; sync(); });
+    queueMicrotask(sync);
+    return inp;
+  }));
+  refreshAll();
+}
+function buildBond() {
+  bondHost.textContent = '';
+  bondHost.append(matrixTable((a, b) => {
+    const cb = h('input', { type: 'checkbox', class: 'bcell', checked: !!sim.canBond[a * MAX_TYPES + b] });
+    cb.onchange = () => { sim.setCanBond(a, b, cb.checked); const o = bondHost.querySelectorAll('.bcell'); const n = sim.numTypes; if (o[b * n + a]) o[b * n + a].checked = cb.checked; };
+    return cb;
+  }));
+}
+function buildValence() {
+  valHost.textContent = '';
+  const tb = h('table', { class: 'v' }, h('tr', null, h('th', null, '色'), h('th', null, '種類'), h('th', { style: 'width:100%' }, '価数'), h('th', null, '操作')));
+  for (let t = 0; t < sim.numTypes; t++) {
+    const sl = h('input', { type: 'range', min: 0, max: MAX_BONDS, step: 1, value: sim.valence[t] });
+    const lab = h('span', { style: 'display:inline-block;width:1.2em;text-align:right' }, sim.valence[t]);
+    sl.oninput = () => { sim.valence[t] = +sl.value; lab.textContent = sl.value; };
+    const del = h('button', { class: 'sm', disabled: sim.numTypes <= 1, onclick: () => {
+      sim.removeType(t);
+      for (let q = t; q < MAX_TYPES - 1; q++) st.ratios[q] = st.ratios[q + 1];
+      st.ratios[MAX_TYPES - 1] = 1;
+      st.brushType = Math.min(st.brushType, sim.numTypes - 1); st.numTypesEdit = sim.numTypes;
+      rebuildTypeUI();
+    } }, '削除');
+    tb.append(h('tr', null, h('td', null, swatch(t)), h('td', { style: 'white-space:nowrap' }, '種類 ' + t),
+      h('td', null, h('div', { style: 'display:flex;gap:6px;align-items:center' }, sl, lab)), h('td', null, del)));
+  }
+  valHost.append(tb);
+}
+
+function buildBottom() {
+  const B = $('bottom'); B.textContent = '';
+  modeHost = h('div'); pickHost = h('div'); ratioHost = h('div');
+  const rowA = h('div', { class: 'row' },
+    freeNum({ label: '粒子数の上限', get: () => st.cap, set: v => st.cap = v, smin: 1, smax: MAX_P, hmin: 0, hmax: MAX_P, int: true, log: true, width: 140 }),
+    freeNum({ label: '種類数', get: () => st.numTypesEdit, set: v => st.numTypesEdit = v, smin: 1, smax: MAX_TYPES, hmin: 1, hmax: MAX_TYPES, int: true, width: 90,
+      commit: () => { if (st.numTypesEdit !== sim.numTypes) applyNumTypes(st.numTypesEdit); },
+      help: '確定 (スライダーを離す / Enter) で即反映。\n減らすと末尾の種類とその粒子・結合を削除、増やした種類は力0・結合不可・価数0で追加' }),
+    freeNum({ label: '世界の広さ', get: () => st.worldEdit, set: v => st.worldEdit = v, smin: 0.5, smax: 5, hmin: 0.05, hmax: 1000, dec: 2, log: true, width: 120,
+      commit: () => {
+        if (st.worldEdit === sim.world) return;
+        sim.world = st.worldEdit;
+        sim.p.rMax = Math.min(sim.p.rMax, sim.world * 0.45); sim.p.bondDist = Math.min(sim.p.bondDist, sim.world * 0.45);
+        sim.randomFill(st.cap, st.ratios); refreshAll();
+      }, help: 'ループ空間の一辺の長さ。最大距離・ボンド長などはそのまま。\n確定すると全消去し、ランダム配置の比率で上限数まで再生成します' }));
+  const rowB = h('div', { class: 'row' },
+    h('label', null, h('input', { type: 'radio', name: 'mode', checked: st.mode === 0, onchange: () => { st.mode = 0; buildPlacement(); } }), ' 手動配置'),
+    h('label', null, h('input', { type: 'radio', name: 'mode', checked: st.mode === 1, onchange: () => { st.mode = 1; buildPlacement(); } }), ' ランダム配置'),
+    button('全消去', () => sim.clearParticles()));
+  B.append(rowA, rowB, h('hr', { style: 'border:0;border-top:1px solid var(--line)' }), modeHost);
+  buildPlacement();
+}
+function applyNumTypes(n) {
+  const before = sim.numTypes;
+  sim.setNumTypes(n);
+  for (let t = before; t < sim.numTypes; t++) st.ratios[t] = 1;
+  st.brushType = Math.min(st.brushType, sim.numTypes - 1); st.numTypesEdit = sim.numTypes;
+  rebuildTypeUI();
+}
+function buildPlacement() {
+  modeHost.textContent = '';
+  if (st.mode === 0) {
+    const picks = h('div', { class: 'row' }, '配置する種類:');
+    for (let t = 0; t < sim.numTypes; t++) {
+      const c = typeColor(t, st.sat, st.val);
+      const b = h('button', { class: 'pick' + (st.brushType === t ? ' sel' : ''), title: '種類 ' + t, onclick: () => { st.brushType = t; buildPlacement(); } });
+      b.style.background = `rgb(${c.map(v => Math.round(v * 255)).join(',')})`; b._t = t; swatches.push(b); picks.append(b);
+    }
+    modeHost.append(picks, h('div', { class: 'row' },
+      freeNum({ label: 'ブラシ半径', get: () => st.brushRadius, set: v => st.brushRadius = v, smin: 0.002, smax: 0.15, hmin: 0.0001, hmax: 1000, dec: 4, log: true, width: 130 }),
+      freeNum({ label: 'ドラッグ時の配置数/フレーム', get: () => st.brushRate, set: v => st.brushRate = v, smin: 1, smax: 50, hmin: 1, hmax: 100000, int: true, width: 110 })),
+      h('div', { class: 'dim' }, '左クリック: 1個配置 / 左ドラッグ: ブラシ範囲に連続配置 / 右ドラッグ: 消去'));
+  } else {
+    const rs = h('div', { class: 'row' }, '種類ごとの比率:', button('全て1', () => { st.ratios.fill(1); buildPlacement(); }, 'sm'));
+    const box = h('div');
+    for (let t = 0; t < sim.numTypes; t++) {
+      const inp = h('input', { type: 'number', step: 0.05, min: 0, value: st.ratios[t] });
+      inp.onchange = () => { st.ratios[t] = clamp(parseFloat(inp.value) || 0, 0, 1e6); inp.value = st.ratios[t]; };
+      box.append(h('span', { class: 'ratio' }, swatch(t), inp));
+      if (t % 8 === 7) box.append(h('br'));
+    }
+    modeHost.append(rs, box, h('div', { class: 'row' }, button('一括生成 (全消去して上限数まで)', () => sim.randomFill(st.cap, st.ratios))));
+  }
+}
+
+// ===== プレビュー・入力 =====
+const stage = $('stage'), pv = $('pv'), brush = $('brush');
+let canvasEl = $('cv'), renderer = null, side = 0, dpr = 1;
+function makeRenderer(kind) {
+  // コンテキスト種別は canvas ごとに固定されるため、切り替え時は canvas を作り直す
+  for (const k of kind === '2d' ? ['2d'] : ['gl', '2d']) {
+    const fresh = document.createElement('canvas'); fresh.id = 'cv';
+    let r;
+    try { r = k === '2d' ? new Canvas2DRenderer(fresh) : new GLRenderer(fresh); } catch (e) { continue; }
+    canvasEl.replaceWith(fresh); canvasEl = fresh; renderer = r; break;
+  }
+  bindCanvas(canvasEl); layout();
+}
+function layout() {
+  const c = canvasEl;
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  side = Math.max(50, Math.floor(Math.min(pv.clientWidth, pv.clientHeight)));
+  stage.style.width = stage.style.height = side + 'px';
+  c.style.width = c.style.height = side + 'px';
+  c.width = c.height = Math.round(side * dpr);
+}
+new ResizeObserver(layout).observe(pv);
+
+const ptr = { left: false, right: false, x: 0, y: 0, x0: 0, y0: 0, dragging: false, inside: false };
+function worldPos() { const r = canvasEl.getBoundingClientRect(); return [(ptr.x - r.left) / r.width * sim.world, (ptr.y - r.top) / r.height * sim.world]; }
+function bindCanvas(c) {
+  c.oncontextmenu = e => e.preventDefault();
+  c.onpointerdown = e => {
+    c.setPointerCapture(e.pointerId);
+    ptr.x = ptr.x0 = e.clientX; ptr.y = ptr.y0 = e.clientY; ptr.inside = true;
+    if (e.button === 2) ptr.right = true;
+    else if (e.button === 0) { ptr.left = true; ptr.dragging = false; if (st.mode === 0) { const [wx, wy] = worldPos(); sim.addParticle(wx, wy, st.brushType, st.cap); } }
+  };
+  c.onpointermove = e => {
+    ptr.x = e.clientX; ptr.y = e.clientY;
+    const r = c.getBoundingClientRect();
+    ptr.inside = e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.bottom;
+    if (ptr.left && Math.hypot(ptr.x - ptr.x0, ptr.y - ptr.y0) > 2) ptr.dragging = true;
+    if (st.mode === 0 && ptr.inside) {
+      const rr = st.brushRadius / sim.world * r.width, sr = stage.getBoundingClientRect();
+      brush.style.display = 'block'; brush.style.width = brush.style.height = rr * 2 + 'px';
+      brush.style.left = e.clientX - sr.left + 'px'; brush.style.top = e.clientY - sr.top + 'px';
+    } else brush.style.display = 'none';
+  };
+  c.onpointerup = c.onpointercancel = e => { if (e.button === 2) ptr.right = false; else ptr.left = ptr.dragging = false; };
+  c.onpointerleave = () => { if (!ptr.left && !ptr.right) brush.style.display = 'none'; };
+}
+function handleInput() {
+  if (st.mode !== 0 || !ptr.inside) return;
+  const [wx, wy] = worldPos();
+  if (ptr.left && ptr.dragging) {
+    for (let k = 0; k < st.brushRate; k++) {
+      const a = Math.random() * 6.2831853, r = Math.sqrt(Math.random()) * st.brushRadius;
+      if (!sim.addParticle(wx + Math.cos(a) * r, wy + Math.sin(a) * r, st.brushType, st.cap)) break;
+    }
+  }
+  if (ptr.right) sim.removeInRadius(wx, wy, st.brushRadius);
+}
+
+// ===== メインループ =====
+let last = performance.now(), frame = 0, fpsAcc = 0, fpsN = 0;
+function loop(now) {
+  const el = Math.min(0.25, (now - last) / 1000); last = now;
+  fpsAcc += el; fpsN++;
+  if (!st.paused) {
+    const t0 = performance.now();
+    // 1倍 = 60 ステップ/秒。60Hz 以下の画面では exe と同じく 1 フレーム 1 ステップ、高リフレッシュレートでは速くなりすぎないよう按分
+    st.stepAcc += st.speed * Math.min(1, el * 60);
+    const steps = Math.min(KMAX_STEPS, Math.floor(st.stepAcc));
+    st.stepAcc -= Math.floor(st.stepAcc);
+    for (let i = 0; i < steps; i++) {
+      sim.step();
+      if (performance.now() - t0 > 50) break;  // 1 フレームの計算は 50ms で打ち切り（超過分は捨てる）
+    }
+    st.simMs = st.simMs * 0.9 + (performance.now() - t0) * 0.1;
+  }
+  handleInput();
+  if (renderer) renderer.draw(sim, Math.round(side * dpr), dpr, st.pointPx, st.showBonds, st.sat, st.val);
+  if (frame++ % 10 === 0) {
+    if (fpsAcc > 0) st.fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0;
+    $('status').textContent = `粒子 ${sim.n} / ${st.cap}   結合 ${sim.totalBonds()}   種類 ${sim.numTypes}`;
+    $('perf').textContent = `${st.fps.toFixed(0)} FPS   計算 ${st.simMs.toFixed(2)} ms/フレーム   描画: ${renderer ? renderer.kind : '-'}`;
+  }
+  requestAnimationFrame(loop);
+}
+
+// ===== 起動 =====
+(function init() {
+  sim.setNumTypes(3);
+  sim.randomizeWeak();
+  const val = [2, 1, 3];
+  for (let a = 0; a < sim.numTypes; a++) {
+    sim.valence[a] = val[a % 3];
+    for (let b = 0; b < sim.numTypes; b++) sim.canBond[a * MAX_TYPES + b] = 1;
+  }
+  st.numTypesEdit = sim.numTypes;
+  buildRight(); buildBottom();
+  const q = new URLSearchParams(location.search).get('renderer');
+  makeRenderer(q === '2d' ? '2d' : 'gl');
+  sim.randomFill(st.cap, st.ratios);
+  refreshAll();
+  window.__epl = { sim, st, makeRenderer, refreshAll, applyPreset, snapshotPreset, get renderer() { return renderer; } };
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

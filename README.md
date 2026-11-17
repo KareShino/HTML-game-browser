@@ -10,7 +10,8 @@
    - 単一HTML（例: `my-game.html`）
    - フォルダ（中に `index.html` 必須。任意で `thumbnail.png`、`meta.json`）
    - ZIP（中身はフォルダと同じ）
-2. `meta.json`（任意）
+   - 単一HTMLのサムネイルは、同名のPNG（例: `my-game.png`）を `games/` に置く
+2. `meta.json`（任意。単一HTMLは `my-game.json`）
    ```json
    { "title": "ゲーム名", "description": "説明" }
    ```

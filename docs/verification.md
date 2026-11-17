@@ -3,7 +3,7 @@
 ## 開発環境で確認済みの項目（Linux）
 
 - `node --test tools/build.test.mjs`（ID変換・Zip Slip・シンボリックリンク・サイズ偽装・shim注入）
-- `node tools/build.mjs` で3形式のサンプルが `dist/games/<ID>/index.html` にそろい、`dist/games.json` が生成される
+- `node tools/build.mjs` で `games/` の全ゲームが `dist/games/<ID>/index.html` にそろい、`dist/games.json` が生成される（フォルダ・ZIP形式はテスト `tools/build.test.mjs` で確認）
 - `cd offline && go vet ./... && go test ./...`
 - Goサーバーを実際に起動し、`curl` で以下を確認
   - `/`、`/games.json`、`/games/<ID>/` が200、MIMEタイプが正しい
@@ -22,7 +22,8 @@
 2. コンソールウィンドウが出ず、既定ブラウザに `http://127.0.0.1:18080/` が開く
 3. 一覧・プレイ・全画面・一覧へ戻る・ライト/ダークが動く
 4. ブラウザを閉じて再度 `http://127.0.0.1:18080/` を開いても表示できる（サーバーが残っている）
-5. exeを2重に起動 → 2つ目は別ポート（18081など）で開く
+5. exeを2重に起動 → 2つ目はサーバーを増やさず、ブラウザだけが同じ `http://127.0.0.1:18080/` で開く（`launcher.log` に「すでに起動しています」と出る）
+   - 別のアプリが18080を使っているときだけ、別ポート（18081など）で起動する
 6. `stop.bat` でプロセスが終了する（タスクマネージャーで `html-game-launcher.exe` が消える）
 7. ウイルス対策ソフトが exe を隔離しない
 8. 起動しない場合は exe と同じフォルダの `launcher.log` を確認
@@ -41,7 +42,7 @@
 ### Web版
 
 1. `main` へのpush後、Actionsの Deploy to GitHub Pages が成功する
-2. `https://kareshino.github.io/html-game-browser/` で一覧が表示され、3形式のサンプルがプレイできる
+2. `https://kareshino.github.io/html-game-browser/` で一覧が表示され、全ゲームがプレイできる
 3. ゲームのHTTPS環境での動作（音声・全画面・localStorage）
 
 ### 展示前の通し確認

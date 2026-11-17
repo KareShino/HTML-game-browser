@@ -63,6 +63,17 @@ func main() {
 		log.Fatalf("dist が見つかりません（index.html がありません）: %s", dist)
 	}
 
+	if alreadyRunning(*port) {
+		url := fmt.Sprintf("http://127.0.0.1:%d/", *port)
+		log.Printf("すでに起動しています。ブラウザだけ開きます: %s", url)
+		if !*noBrowser {
+			if err := openBrowser(url); err != nil {
+				log.Printf("ブラウザを開けませんでした: %v", err)
+			}
+		}
+		return
+	}
+
 	ln, err := listenPreferred(*port, 20)
 	if err != nil {
 		log.Fatal(err)

@@ -6,6 +6,8 @@
 
   var games = [];
   var selectedId = null;
+  var query = "";
+  var SEARCH_MIN_GAMES = 8;  // これ以上ゲームがあるときだけ検索欄を出す
   var $ = function (id) { return document.getElementById(id); };
   var viewList = $("view-list"), viewPlay = $("view-play"), stage = $("stage"), frame = $("frame");
 
@@ -39,12 +41,23 @@
     return p;
   }
 
+  function visibleGames() {
+    var q = query.trim().toLowerCase();
+    if (!q) return games;
+    return games.filter(function (g) { return (g.title + " " + (g.description || "")).toLowerCase().indexOf(q) >= 0; });
+  }
+
   function renderList() {
     $("count").textContent = games.length + " ゲーム";
+    $("search").hidden = games.length < SEARCH_MIN_GAMES;
     var ul = $("game-list");
     ul.textContent = "";
-    games.forEach(function (g) {
+    var shown = visibleGames();
+    if (!shown.length && games.length) ul.appendChild(el("li", "no-match", "該当するゲームがありません"));
+    shown.forEach(function (g) {
       var li = el("li", "game-item" + (g.id === selectedId ? " selected" : ""));
+      li.tabIndex = 0;
+      li.dataset.id = g.id;
       var main = el("div", "item-main");
       main.appendChild(el("div", "item-title", g.title));
       main.appendChild(el("span", "badge", FORMAT_LABEL[g.format] || g.format));
@@ -54,6 +67,9 @@
       li.appendChild(main);
       li.appendChild(play);
       li.addEventListener("click", function () { select(g.id); });
+      li.addEventListener("keydown", function (ev) {
+        if (ev.target === li && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); select(g.id); }
+      });
       ul.appendChild(li);
     });
     renderDetail();
@@ -61,8 +77,8 @@
 
   function select(id) {
     selectedId = id;
-    Array.prototype.forEach.call($("game-list").children, function (li, i) {
-      li.classList.toggle("selected", games[i].id === id);
+    Array.prototype.forEach.call($("game-list").children, function (li) {
+      li.classList.toggle("selected", li.dataset.id === id);
     });
     renderDetail();
   }
@@ -143,24 +159,38 @@
   $("fullscreen").addEventListener("click", function () {
     if (fsElement()) { exitFullscreen(); return; }
     var f = stage.requestFullscreen || stage.webkitRequestFullscreen;
-    if (f) f.call(stage);
+    if (!f) return;
+    var r = f.call(stage);
+    if (r && r.catch) r.catch(function () {});  // 全画面を拒否されても何も起こさない
   });
   function onFsChange() {
     var on = fsElement() === stage;
     stage.classList.toggle("is-fs", on);
-    stage.classList.remove("bar-visible");
+    hideBar();
     $("fullscreen").textContent = on ? "全画面を解除" : "全画面";
     if (viewPlay.hidden === false) frame.focus();
   }
   document.addEventListener("fullscreenchange", onFsChange);
   document.addEventListener("webkitfullscreenchange", onFsChange);
-  $("hotzone").addEventListener("mouseenter", function () { stage.classList.add("bar-visible"); });
-  $("playbar").addEventListener("mouseleave", function () { stage.classList.remove("bar-visible"); });
+  // 上部バーは、上端に寄せると出て、ポインタが離れると消える。
+  // mouseleave だけだとポインタが素早くゲーム(iframe)側へ抜けたときに取りこぼすため、:hover を定期確認して必ず消す。
+  var hideTimer = null;
+  function hideBar() { clearTimeout(hideTimer); stage.classList.remove("bar-visible"); }
+  function watchBar() {
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(function () {
+      if (!stage.classList.contains("bar-visible")) return;
+      if ($("playbar").matches(":hover")) watchBar(); else hideBar();
+    }, 700);
+  }
+  $("hotzone").addEventListener("mouseenter", function () { stage.classList.add("bar-visible"); watchBar(); });
+  $("playbar").addEventListener("mouseleave", hideBar);
   stage.addEventListener("mousemove", function (ev) {
     if (stage.classList.contains("bar-visible") && ev.clientY > $("playbar").offsetHeight + 24) stage.classList.remove("bar-visible");
   });
 
   // ---------- 起動 ----------
+  $("search").addEventListener("input", function () { query = $("search").value; renderList(); });
   window.addEventListener("hashchange", route);
   fetch("games.json", { cache: "no-store" })
     .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })

@@ -12,6 +12,7 @@
     document.documentElement.setAttribute("data-theme", t);
   })();
 </script>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -24,7 +25,7 @@
     <button type="button" class="btn theme-toggle"></button>
   </header>
   <div class="layout">
-    <aside class="sidebar"><ul id="game-list" class="game-list"></ul></aside>
+    <aside class="sidebar"><input id="search" class="search" type="search" placeholder="ゲームを検索" aria-label="ゲームを検索" hidden><ul id="game-list" class="game-list"></ul></aside>
     <main id="detail" class="detail"></main>
   </div>
 </div>

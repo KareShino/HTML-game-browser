@@ -19,6 +19,7 @@
       clear: function () { keys().forEach(function (k) { real.removeItem(P + k); }); }
     };
     var proxy = new Proxy(api, {
+      getPrototypeOf: function () { return Storage.prototype; },  // instanceof Storage を保つ
       get: function (t, p) {
         if (p === "length") return keys().length;
         if (typeof p === "symbol") return p === Symbol.toStringTag ? "Storage" : undefined;
