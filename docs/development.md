@@ -44,6 +44,7 @@ node --test tools/build.test.mjs
       "id": "sample-zip",
       "title": "表示名",
       "description": "説明（空文字可）",
+      "steps": ["手順1", "手順2"],
       "format": "single | folder | zip",
       "path": "games/sample-zip/index.html",
       "thumbnail": "games/sample-zip/thumbnail.png"
@@ -52,6 +53,7 @@ node --test tools/build.test.mjs
 }
 ```
 
+- `steps` は詳細画面の「遊び方」に番号付きで表示する手順（`meta.json` / `games/<名前>.json` の `steps` 配列。1項目120文字・最大8項目、なければ `[]`）。
 - `path` / `thumbnail` は `dist/` からの相対パス（Pagesのサブパスでも動く）。`thumbnail` がなければ `null`。
 - ZIPは `index.html` が直下にあるか、単一の最上位フォルダ直下にあれば取り込める。
 - サムネイルは、フォルダ/ZIPなら中の `thumbnail.png`、なければ `games/<名前>.png`。単一HTMLは `games/<名前>.png` のみ。PNG以外・8MB超は警告して無視する。

@@ -117,3 +117,10 @@ test("title is decoded using meta charset", () => {
   const r = buildIn({ "s.html": sjis });
   assert.equal(r.games[0].title, "テスト");
 });
+
+test("sidecar json steps are passed through (trimmed, capped at 8)", () => {
+  const steps = ["  一  ", "", 2, ...Array.from({ length: 9 }, (_, i) => "s" + i)];
+  const r = buildIn({ "a.html": "<title>T</title>", "a.json": JSON.stringify({ steps }) });
+  const a = r.games.find((g) => g.title === "T");
+  assert.equal(a.steps.length, 8); assert.equal(a.steps[0], "一");
+});

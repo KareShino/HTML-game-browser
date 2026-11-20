@@ -108,6 +108,14 @@
     big.type = "button";
     big.addEventListener("click", function () { play_(g.id); });
     d.appendChild(big);
+    if (Array.isArray(g.steps) && g.steps.length) {
+      var how = el("section", "howto");
+      how.appendChild(el("h3", "howto-title", "遊び方"));
+      var ol = el("ol", "howto-steps");
+      g.steps.forEach(function (t) { ol.appendChild(el("li", null, t)); });
+      how.appendChild(ol);
+      d.appendChild(how);
+    }
   }
 
   // ---------- 画面切り替え ----------

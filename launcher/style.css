@@ -60,6 +60,11 @@ body { background: var(--bg); color: var(--text); font-family: system-ui, "Hirag
 .detail-title { font-size: 26px; margin: 0; text-align: center; }
 .detail-desc { margin: 0; max-width: 720px; color: var(--muted); text-align: center; white-space: pre-wrap; }
 .play-big { font-size: 22px; font-weight: 700; padding: 14px 56px; border-radius: 12px; }
+.howto { width: min(100%, 720px); background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; }
+.howto-title { margin: 0 0 10px; font-size: 16px; }
+.howto-steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: flex; flex-direction: column; gap: 10px; }
+.howto-steps li { counter-increment: step; display: flex; gap: 12px; align-items: flex-start; line-height: 1.6; }
+.howto-steps li::before { content: counter(step); flex: none; width: 24px; height: 24px; margin-top: 1px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 13px; font-weight: 700; display: grid; place-items: center; }
 .empty { margin: auto; color: var(--muted); text-align: center; padding: 24px; }
 
 .stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }

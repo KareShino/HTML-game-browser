@@ -233,7 +233,8 @@ function htmlTitle(buf) {
 function parseMeta(text) {
   const j = JSON.parse(text.replace(/^\uFEFF/, ""));
   const str = (v, max) => (typeof v === "string" ? v.trim().slice(0, max) : "");
-  return { title: str(j?.title, 100), description: str(j?.description, 500) };
+  const steps = Array.isArray(j?.steps) ? j.steps.map((v) => str(v, 120)).filter(Boolean).slice(0, 8) : [];
+  return { title: str(j?.title, 100), description: str(j?.description, 500), steps };
 }
 
 function readMeta(dir) {
@@ -316,7 +317,7 @@ export function build({ gamesDir, outDir, launcherDir, log = console.log }) {
 
       const side = readSidecar(gamesDir, base, allFiles, log);
       const own = format === "single" ? {} : readMeta(dest);
-      const meta = { title: own.title || side.meta.title, description: own.description || side.meta.description };
+      const meta = { title: own.title || side.meta.title, description: own.description || side.meta.description, steps: own.steps?.length ? own.steps : side.meta.steps || [] };
       const title = meta.title || htmlTitle(fs.readFileSync(indexPath)) || base;
       const thumbPath = path.join(dest, "thumbnail.png");
       if (format === "single" || !fs.existsSync(thumbPath)) {
@@ -329,6 +330,7 @@ export function build({ gamesDir, outDir, launcherDir, log = console.log }) {
         id,
         title,
         description: meta.description || "",
+        steps: meta.steps,
         format,
         path: `games/${id}/index.html`,
         thumbnail: hasThumb ? `games/${id}/thumbnail.png` : null,
