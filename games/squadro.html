@@ -116,7 +116,7 @@ button:disabled,select:disabled,input:disabled{opacity:.38;cursor:default}
 
 <header>
   <h1>squadro</h1>
-  <div class="sub">先に4個スタート地点へ戻したら勝ち</div>
+  <div class="sub">先に4個のコマが、向こう端まで行って帰ってきたら勝ち</div>
 </header>
 
 <div class="turn" id="turnbar">
@@ -172,10 +172,10 @@ button:disabled,select:disabled,input:disabled{opacity:.38;cursor:default}
 <div class="info" id="aiInfo"></div>
 
 <p class="note">
-  コマをタップすると経路・着地点・戻される相手コマが表示され、もう一度タップで確定。<br>
+  コマをタップすると、進む経路・着地点・飛び越されて出発点へ戻される相手コマが表示され、もう一度タップで確定。<br>
   コマの数字は今の移動力（往路と復路で変わる）。飛び越しも1手ぶんとして数える。<br>
   「全手読み」は思考時間いっぱいまで深く読み、終局まで読み切れた場合はそこで打ち切る。<br>
-  「負けるが勝ち」では先に4個戻した側が負け。AIは評価を反転させて最悪手を狙う。<br>
+  「負けるが勝ち」では、先に4個を帰ってこさせた側が負け。AIは評価を反転させて最悪手を狙う。<br>
   「最善手表示」は人間の手番に、AIと同じ設定で計算した推奨手を破線で示す。<br>
   「配置編集」中はコマ→置きたいマスの順にタップで自由配置。コマを2回タップで進行方向が反転。<br>
   盤上部の手番バーをタップすると手番が入れ替わる。
